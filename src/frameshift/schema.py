@@ -462,10 +462,18 @@ class SchemaInferer:
         }
 
         for col_spec in schema.columns:
+            # Build type string properly
+            type_str = col_spec.redshift_type.value
+            if col_spec.length:
+                type_str = f"{type_str}({col_spec.length})"
+            elif col_spec.precision:
+                scale = col_spec.scale or 0
+                type_str = f"{type_str}({col_spec.precision},{scale})"
+
             col_info = {
                 "name": col_spec.name,
                 "pandas_dtype": str(df[col_spec.name].dtype) if col_spec.name in df.columns else "index",
-                "redshift_type": col_spec.to_sql().split('"')[2].strip(),
+                "redshift_type": type_str,
                 "nullable": col_spec.nullable,
                 "null_count": int(df[col_spec.name].isna().sum()) if col_spec.name in df.columns else 0,
                 "unique_count": int(df[col_spec.name].nunique()) if col_spec.name in df.columns else 0,

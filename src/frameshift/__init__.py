@@ -67,7 +67,7 @@ from frameshift.types import (
 )
 from frameshift.exceptions import (
     FrameShiftError,
-    ConnectionError,
+    RedshiftConnectionError,
     ChunkingError,
     DataTypeError,
     InsertError,
@@ -75,7 +75,7 @@ from frameshift.exceptions import (
 )
 
 __version__ = "0.1.0"
-__author__ = "Ryan H"
+__author__ = "Louis N. Capece"
 
 __all__ = [
     # Main interface
@@ -102,7 +102,7 @@ __all__ = [
     "python_to_sql_value",
     # Exceptions
     "FrameShiftError",
-    "ConnectionError",
+    "RedshiftConnectionError",
     "ChunkingError",
     "DataTypeError",
     "InsertError",

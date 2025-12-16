@@ -7,7 +7,6 @@ Redshift's 16 MB SQL statement size limit.
 
 from dataclasses import dataclass
 from typing import Iterator, Any
-import sys
 
 import pandas as pd
 import numpy as np

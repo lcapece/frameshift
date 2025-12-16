@@ -34,7 +34,7 @@ class FrameShiftError(Exception):
         return self.message
 
 
-class ConnectionError(FrameShiftError):
+class RedshiftConnectionError(FrameShiftError):
     """
     Raised when a database connection cannot be established.
 

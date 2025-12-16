@@ -15,7 +15,7 @@ Enter Frameshift: the "I just need to get this data into Redshift (and I'm in no
 
 **Frameshift is 10-20x slower than COPY.** There, we said it.
 
-Even tried being clever with 16 parallel threads, mimicking Redshift's MD5 hash distribution pattern. Turns out Redshift's leader node just laughs at your multi=threading ambitions and processes everything sequentially anyway. We settled on 4 threads which helps *somewhat*, but don't expect miracles.
+Even tried being clever with 16 parallel threads, mimicking Redshift's MD5 hash distribution pattern. Turns out Redshift's leader node just laughs at your multi-threading ambitions and processes everything sequentially anyway. We settled on 4 threads which helps *somewhat*, but don't expect miracles.
 
 **TEST RESULTS (8 RPU Redshift Serverless**
 

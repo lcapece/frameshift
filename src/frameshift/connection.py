@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from typing import Any, Iterator, Protocol, runtime_checkable
 
-from frameshift.exceptions import ConnectionError
+from frameshift.exceptions import RedshiftConnectionError
 
 
 @runtime_checkable
@@ -147,12 +147,12 @@ class Psycopg2ConnectionManager(ConnectionManager):
             self._connection = psycopg2.connect(**self.connection_params)
             return self._connection
         except ImportError:
-            raise ConnectionError(
+            raise RedshiftConnectionError(
                 "psycopg2 is not installed. Install with: pip install psycopg2-binary",
                 host=self.connection_params.get("host"),
             )
         except Exception as e:
-            raise ConnectionError(
+            raise RedshiftConnectionError(
                 f"Failed to connect to Redshift: {e}",
                 host=self.connection_params.get("host"),
                 port=self.connection_params.get("port"),
@@ -218,13 +218,13 @@ class RedshiftConnectorManager(ConnectionManager):
             self._connection = redshift_connector.connect(**self.connection_params)
             return self._connection
         except ImportError:
-            raise ConnectionError(
+            raise RedshiftConnectionError(
                 "redshift-connector is not installed. "
                 "Install with: pip install redshift-connector",
                 host=self.connection_params.get("host"),
             )
         except Exception as e:
-            raise ConnectionError(
+            raise RedshiftConnectionError(
                 f"Failed to connect to Redshift: {e}",
                 host=self.connection_params.get("host"),
                 port=self.connection_params.get("port"),
@@ -257,7 +257,7 @@ class ExternalConnectionManager(ConnectionManager):
             connection: A database connection object.
         """
         if not isinstance(connection, DBConnection):
-            raise ConnectionError(
+            raise RedshiftConnectionError(
                 "Provided connection does not implement required interface. "
                 "Connection must have cursor(), commit(), rollback(), and close() methods."
             )
@@ -306,12 +306,12 @@ class SQLAlchemyConnectionManager(ConnectionManager):
 
                 self._engine = create_engine(connection_string, **kwargs)
             except ImportError:
-                raise ConnectionError(
+                raise RedshiftConnectionError(
                     "SQLAlchemy is not installed. "
                     "Install with: pip install sqlalchemy sqlalchemy-redshift"
                 )
         else:
-            raise ConnectionError(
+            raise RedshiftConnectionError(
                 "Either connection_string or engine must be provided"
             )
 
@@ -372,7 +372,7 @@ def create_connection_manager(
 
     # Direct connection parameters
     if not all([host, database, user, password]):
-        raise ConnectionError(
+        raise RedshiftConnectionError(
             "Must provide either: (1) host, database, user, password, "
             "(2) an existing connection, or (3) a SQLAlchemy connection_string"
         )
