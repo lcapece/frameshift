@@ -59,6 +59,10 @@ class FrameShiftConfig:
     max_statement_bytes: int = DEFAULT_MAX_STATEMENT_SIZE
     batch_size: int = 1000
 
+    # Parallel loading (MD5 hash distribution across threads)
+    parallel_threads: int = 4  # 0=auto, 1=single-threaded, 2-16=fixed threads
+    parallel_threshold: int = 5000  # Min rows to enable parallel (when auto)
+
     # Transaction handling
     use_transactions: bool = True
     commit_every: int = 0  # 0 = single transaction for all chunks
@@ -104,6 +108,10 @@ class FrameShiftConfig:
             raise ValueError(f"on_error must be 'abort', 'skip', or 'log', got {self.on_error}")
         if self.varchar_max_length < 1 or self.varchar_max_length > 65535:
             raise ValueError("varchar_max_length must be between 1 and 65535")
+        if self.parallel_threads < 0 or self.parallel_threads > 16:
+            raise ValueError("parallel_threads must be between 0 and 16 (0=auto)")
+        if self.parallel_threshold < 1:
+            raise ValueError("parallel_threshold must be at least 1")
 
     @classmethod
     def for_data_api(cls) -> "FrameShiftConfig":
@@ -126,8 +134,8 @@ class FrameShiftConfig:
         """
         Create a configuration optimized for large dataset loading.
 
-        Uses maximum statement sizes and periodic commits to
-        balance performance with memory usage.
+        Uses maximum statement sizes, parallel threads, and periodic
+        commits to balance performance with memory usage.
 
         Returns:
             FrameShiftConfig configured for large datasets.
@@ -135,7 +143,8 @@ class FrameShiftConfig:
         return cls(
             max_statement_bytes=15 * 1024 * 1024,  # 15 MB
             batch_size=5000,
-            commit_every=10,  # Commit every 10 chunks
+            parallel_threads=8,  # Use 8 parallel threads
+            commit_every=1,  # Commit after each chunk per thread
         )
 
     @classmethod

@@ -6,7 +6,10 @@ This is the main entry point for the Frameshift library.
 
 from dataclasses import dataclass
 from typing import Any, Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
 import logging
+import threading
 import time
 
 import pandas as pd
@@ -272,36 +275,83 @@ class FrameShift:
             with self._connection_manager.connection() as conn:
                 cursor = conn.cursor()
 
-                try:
-                    # Handle table existence
-                    table_exists = self._table_exists(
-                        cursor, table_name, schema_name
-                    )
+                # Handle table existence
+                table_exists = self._table_exists(
+                    cursor, table_name, schema_name
+                )
 
-                    if table_exists:
-                        if if_exists == "fail":
-                            raise ValidationError(
-                                f"Table {schema_name}.{table_name} already exists",
-                                field="if_exists",
-                            )
-                        elif if_exists == "replace":
-                            drop_sql = f'DROP TABLE IF EXISTS "{schema_name}"."{table_name}"'
-                            if self.config.dry_run:
-                                sql_statements.append(drop_sql)
-                            else:
-                                cursor.execute(drop_sql)
-                            table_exists = False
-
-                    if not table_exists:
-                        create_sql = table_schema.to_create_table_sql()
+                if table_exists:
+                    if if_exists == "fail":
+                        raise ValidationError(
+                            f"Table {schema_name}.{table_name} already exists",
+                            field="if_exists",
+                        )
+                    elif if_exists == "replace":
+                        drop_sql = f'DROP TABLE IF EXISTS "{schema_name}"."{table_name}"'
                         if self.config.dry_run:
-                            sql_statements.append(create_sql)
+                            sql_statements.append(drop_sql)
                         else:
-                            cursor.execute(create_sql)
-                            created_table = True
+                            cursor.execute(drop_sql)
+                        table_exists = False
 
+                if not table_exists:
+                    create_sql = table_schema.to_create_table_sql()
+                    if self.config.dry_run:
+                        sql_statements.append(create_sql)
+                    else:
+                        cursor.execute(create_sql)
+                        created_table = True
+
+                # Determine if parallel loading should be used
+                total_rows = len(df)
+                use_parallel = False
+                num_threads = 1
+
+                if not self.config.dry_run:
+                    if self.config.parallel_threads == 0:
+                        # Auto: use parallel if above threshold
+                        if total_rows >= self.config.parallel_threshold:
+                            num_threads = min(16, max(2, total_rows // 5000))
+                            use_parallel = True
+                    elif self.config.parallel_threads > 1:
+                        num_threads = self.config.parallel_threads
+                        use_parallel = True
+
+                # Close cursor for parallel loading (each thread gets its own)
+                if use_parallel:
+                    cursor.close()
+
+                    # Determine PK column for MD5 distribution
+                    pk_column = None
+                    if primary_key:
+                        pk_column = primary_key if isinstance(primary_key, str) else primary_key[0]
+                    elif unique_key:
+                        pk_column = unique_key if isinstance(unique_key, str) else unique_key[0]
+                    elif distkey:
+                        pk_column = distkey
+
+                    # Run parallel loading
+                    (
+                        rows_loaded,
+                        rows_failed_count,
+                        chunks_processed,
+                        chunks_failed,
+                        parallel_errors,
+                    ) = self._load_parallel(
+                        df=df,
+                        table_name=table_name,
+                        schema_name=schema_name,
+                        table_schema=table_schema,
+                        num_threads=num_threads,
+                        pk_column=pk_column,
+                        progress_callback=progress_callback,
+                    )
+                    errors.extend(parallel_errors)
+
+                else:
+                    # Single-threaded loading (original behavior)
                     # Begin transaction if configured
-                    if self.config.use_transactions and not self.config.dry_run:
+                    if self.config.use_transactions:
                         cursor.execute("BEGIN")
 
                     # Generate SQL and chunk data
@@ -317,7 +367,6 @@ class FrameShift:
                     insert_prefix_size = len(insert_prefix.encode("utf-8"))
 
                     # Process chunks
-                    total_rows = len(df)
                     commit_counter = 0
 
                     for chunk in self._chunker.chunk(
@@ -381,7 +430,6 @@ class FrameShift:
                     if self.config.use_transactions and not self.config.dry_run:
                         conn.commit()
 
-                finally:
                     cursor.close()
 
         except FrameShiftError:
@@ -421,6 +469,214 @@ class FrameShift:
         """
         cursor.execute(query, (schema_name, table_name))
         return cursor.fetchone() is not None
+
+    def _distribute_by_md5(
+        self,
+        df: pd.DataFrame,
+        num_threads: int,
+        pk_column: str | None = None,
+    ) -> list[pd.DataFrame]:
+        """
+        Distribute DataFrame rows across threads using MD5 hash.
+
+        Uses the first hex character of MD5(pk) to assign rows to threads.
+        This mirrors Redshift's hash distribution for even data spread.
+
+        Args:
+            df: DataFrame to distribute.
+            num_threads: Number of threads (1-16).
+            pk_column: Primary key column (uses index if None).
+
+        Returns:
+            List of DataFrames, one per thread.
+        """
+        if num_threads == 1:
+            return [df]
+
+        # Map hex chars to thread IDs (0-15 for 16 threads)
+        hex_chars = '0123456789abcdef'
+        chars_per_thread = 16 // num_threads
+
+        # Compute MD5 hash for each row
+        if pk_column and pk_column in df.columns:
+            hash_values = df[pk_column].astype(str).apply(
+                lambda x: hashlib.md5(x.encode()).hexdigest()[0]
+            )
+        else:
+            # Use row index
+            hash_values = pd.Series(range(len(df))).apply(
+                lambda x: hashlib.md5(str(x).encode()).hexdigest()[0]
+            )
+
+        # Assign thread based on first hex char
+        thread_assignments = hash_values.apply(
+            lambda h: hex_chars.index(h) // chars_per_thread
+        )
+
+        # Split into DataFrames per thread
+        thread_dfs = []
+        for thread_id in range(num_threads):
+            mask = thread_assignments == thread_id
+            thread_df = df[mask].copy()
+            thread_dfs.append(thread_df)
+
+        return thread_dfs
+
+    def _load_thread_worker(
+        self,
+        thread_id: int,
+        df: pd.DataFrame,
+        table_name: str,
+        schema_name: str,
+        table_schema: Any,
+        progress_state: dict,
+        progress_lock: threading.Lock,
+        progress_callback: Callable | None,
+    ) -> dict:
+        """
+        Worker function for parallel loading.
+
+        Each thread gets its own connection and processes its chunk of data.
+        """
+        result = {
+            'thread_id': thread_id,
+            'rows_loaded': 0,
+            'chunks_processed': 0,
+            'chunks_failed': 0,
+            'errors': [],
+        }
+
+        if df.empty:
+            return result
+
+        try:
+            # Each thread gets its own connection
+            with self._connection_manager.connection() as conn:
+                cursor = conn.cursor()
+
+                try:
+                    sql_gen = SQLGenerator(
+                        table_name=table_name,
+                        schema_name=schema_name,
+                        column_specs=table_schema.columns,
+                    )
+
+                    insert_prefix = sql_gen.generate_insert_prefix(
+                        self.config.include_columns
+                    )
+                    insert_prefix_size = len(insert_prefix.encode("utf-8"))
+
+                    # Process chunks for this thread's data
+                    for chunk in self._chunker.chunk(
+                        df, table_schema.columns, insert_prefix_size
+                    ):
+                        try:
+                            insert_sql = sql_gen.generate_insert_statement(
+                                chunk.data, self.config.include_columns
+                            )
+                            cursor.execute(insert_sql)
+                            conn.commit()  # Commit each chunk for parallel safety
+
+                            result['rows_loaded'] += chunk.row_count
+                            result['chunks_processed'] += 1
+
+                            # Update shared progress
+                            if progress_callback:
+                                with progress_lock:
+                                    progress_state['rows_done'] += chunk.row_count
+                                    progress_state['chunks_done'] += 1
+                                    progress_callback(
+                                        progress_state['rows_done'],
+                                        progress_state['total_rows'],
+                                        progress_state['chunks_done'],
+                                    )
+
+                        except Exception as e:
+                            result['chunks_failed'] += 1
+                            result['errors'].append(
+                                f"Thread {thread_id}, Chunk {chunk.chunk_index}: {e}"
+                            )
+                            if self.config.on_error == 'abort':
+                                raise
+
+                finally:
+                    cursor.close()
+
+        except Exception as e:
+            result['errors'].append(f"Thread {thread_id} failed: {e}")
+
+        return result
+
+    def _load_parallel(
+        self,
+        df: pd.DataFrame,
+        table_name: str,
+        schema_name: str,
+        table_schema: Any,
+        num_threads: int,
+        pk_column: str | None,
+        progress_callback: Callable | None,
+    ) -> tuple[int, int, int, int, list[str]]:
+        """
+        Load data using multiple parallel threads with MD5 distribution.
+
+        Returns:
+            Tuple of (rows_loaded, rows_failed, chunks_processed, chunks_failed, errors)
+        """
+        # Distribute data across threads using MD5
+        thread_dfs = self._distribute_by_md5(df, num_threads, pk_column)
+
+        if self.config.verbosity >= 1:
+            distribution = [len(tdf) for tdf in thread_dfs]
+            logger.info(
+                f"Parallel load: {num_threads} threads, "
+                f"distribution: {distribution}"
+            )
+
+        # Shared progress state
+        progress_lock = threading.Lock()
+        progress_state = {
+            'rows_done': 0,
+            'chunks_done': 0,
+            'total_rows': len(df),
+        }
+
+        # Execute threads
+        rows_loaded = 0
+        chunks_processed = 0
+        chunks_failed = 0
+        errors = []
+
+        with ThreadPoolExecutor(max_workers=num_threads) as executor:
+            futures = {
+                executor.submit(
+                    self._load_thread_worker,
+                    thread_id,
+                    thread_dfs[thread_id],
+                    table_name,
+                    schema_name,
+                    table_schema,
+                    progress_state,
+                    progress_lock,
+                    progress_callback,
+                ): thread_id
+                for thread_id in range(num_threads)
+            }
+
+            for future in as_completed(futures):
+                thread_id = futures[future]
+                try:
+                    result = future.result()
+                    rows_loaded += result['rows_loaded']
+                    chunks_processed += result['chunks_processed']
+                    chunks_failed += result['chunks_failed']
+                    errors.extend(result['errors'])
+                except Exception as e:
+                    errors.append(f"Thread {thread_id} exception: {e}")
+                    chunks_failed += 1
+
+        rows_failed = len(df) - rows_loaded
+        return rows_loaded, rows_failed, chunks_processed, chunks_failed, errors
 
     def generate_sql(
         self,

@@ -5,25 +5,24 @@ build-backend = "hatchling.build"
 [project]
 name = "frameshift"
 version = "0.1.0"
-description = "Load pandas DataFrames into Amazon Redshift without S3 - using efficient multi-row INSERT statements"
+description = "Load pandas DataFrames into Amazon Redshift without S3 - using the somewhat-efficient multi-row INSERT statement AWS Redshift offers"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.9"
 authors = [
-    {name = "Ryan H", email = "frameshift@example.com"}
+    {name = "Louis N. Capece", email = "lcapece@optonline.net"}
 ]
 maintainers = [
-    {name = "Ryan H", email = "frameshift@example.com"}
+    {name = "Louis N. Capece", email = "lcapece@optonline.net"}
 ]
 keywords = [
     "redshift",
-    "aws",
     "pandas",
     "dataframe",
-    "database",
-    "sql",
-    "etl",
-    "data-loading",
+    "without s3",
+    "no-s3",
+    "multi-row-insert",
+    "data loading",
     "insert",
     "bulk-insert",
 ]
@@ -77,11 +76,11 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/frameshift"
+Homepage = "https://github.com/lcapece/frameshift"
 Documentation = "https://frameshift.readthedocs.io"
-Repository = "https://github.com/yourusername/frameshift"
-Issues = "https://github.com/yourusername/frameshift/issues"
-Changelog = "https://github.com/yourusername/frameshift/blob/main/CHANGELOG.md"
+Repository = "https://github.com/lcapece/frameshift"
+Issues = "https://github.com/lcapece/frameshift/issues"
+Changelog = "https://github.com/lcapece/frameshift/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.sdist]
 include = [
