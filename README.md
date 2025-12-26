@@ -55,10 +55,10 @@ with FrameShift(
 ```
 
 That's it. Frameshift handles:
-- Creating the table if it doesn't exist (because you're lazy)
-- Inferring column types from pandas (magical!)
+- Creating the table if it doesn't exist
+- Inferring column types from pandas 
 - Chunking data to maximally fit Redshift's 16MB Multi-Row-Insert statement limit (boring but necessary)
-- Running 4 parallel connections (marginally faster than 1, we tried harder)
+- Running 4 parallel connections (a bit faster than single thread)
 
 ## Options You Might Actually Use
 
@@ -153,7 +153,7 @@ for columns, unique_count in natural_keys:
 #                    customer_id + order_date: 5000 unique
 ```
 
-### Preview SQL Without Running It (Trust Issues?)
+### Preview SQL Without Running It 
 
 ```python
 # Method 1: generate_sql() for the paranoid
@@ -179,8 +179,7 @@ print(f"Best SORTKEY: {recs['sortkey']['columns']}")
 print(recs['sql'])  # Full CREATE TABLE statement
 ```
 
-### Estimate Before Loading ("Measure Once, Load Twice"....wait, is that right?)
-
+### Estimate Before Loading 
 ```python
 estimates = fs.estimate_load(df)
 print(f"Estimated chunks: {estimates['estimated_chunks']}")
@@ -190,7 +189,7 @@ if estimates['estimated_chunks'] > 100:
     print("This is gonna take a while. Coffee time.")
 ```
 
-### Custom Column Types (Control Freak Edition!)
+### Custom Column Types 
 
 Override the inferred types when Frameshift guesses wrong:
 
@@ -206,7 +205,7 @@ custom_columns = [
 fs.load(df, 'products', column_specs=custom_columns)
 ```
 
-### Error Handling (Things Will Go Wrong)
+### Error Handling 
 
 ```python
 from frameshift import FrameShiftConfig
@@ -251,4 +250,4 @@ Motto: Frameshift is for when you *can't* use COPY. Not when you *don't want to*
 
 ## License
 
-MIT  (I may not have gotten accepted by these guys, but hey, happy to use their license!)
+MIT  (I may not have gotten accepted to MIT, but happy to use their license!)
