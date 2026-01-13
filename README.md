@@ -210,13 +210,13 @@ fs.load(df, 'products', column_specs=custom_columns)
 ```python
 from frameshift import FrameShiftConfig
 
-# Skip bad chunks and keep going (YOLO mode)
+# Skip bad chunks and keep going 
 config = FrameShiftConfig(on_error='skip')
 
-# Or log errors but continue (slightly responsible YOLO)
+# Or log errors but continue
 config = FrameShiftConfig(on_error='log')
 
-# Or abort immediately (default, for the risk-averse)
+# Or abort immediately
 config = FrameShiftConfig(on_error='abort')
 ```
 
@@ -250,4 +250,4 @@ Motto: Frameshift is for when you *can't* use COPY. Not when you *don't want to*
 
 ## License
 
-MIT  (I may not have gotten accepted to MIT, but happy to use their license!)
+MIT 
