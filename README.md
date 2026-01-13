@@ -4,7 +4,7 @@
 
 Look, we all know COPY from S3 is the *right* way to load data into Redshift. It's fast, it's highly parallel, it's what Amazon designed. But sometimes life doesn't cooperate:
 
-- Your VPC has no S3 access (yep. thanks security team)
+- Your VPC has no S3 access
 - You're behind an air-gapped network 
 - Someone forgot to give you the S3 credentials 
 - You just need to load 50K rows ONE TIME and don't want to spin up an entire S3 pipeline
