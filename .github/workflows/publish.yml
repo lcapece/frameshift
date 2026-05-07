@@ -31,7 +31,6 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
-    environment: pypi
     permissions:
       id-token: write  # Required for trusted publishing
 
