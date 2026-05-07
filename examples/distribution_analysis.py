@@ -69,9 +69,9 @@ def main():
     comparison = analyzer.compare_columns(df, columns_to_analyze)
     print(comparison.to_string(index=False))
 
-    # Using FrameShift's built-in methods
+    # Using FrameShift built-in methods
     print("\n" + "=" * 60)
-    print("USING FRAMESHIFT API")
+    print("USING FRAMESHIFT")
     print("=" * 60)
 
     # Create FrameShift instance (connection not needed for analysis)

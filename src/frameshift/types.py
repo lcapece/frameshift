@@ -170,7 +170,7 @@ def infer_redshift_type(
     """
     dtype_str = str(series.dtype)
     col_name = str(series.name) if series.name is not None else "column"
-    nullable = series.isna().any()
+    nullable = bool(series.isna().any())
 
     # Check for timezone-aware datetime
     if hasattr(series.dtype, "tz") and series.dtype.tz is not None:

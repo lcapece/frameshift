@@ -256,10 +256,16 @@ class ExternalConnectionManager(ConnectionManager):
         Args:
             connection: A database connection object.
         """
-        if not isinstance(connection, DBConnection):
+        required_methods = ("cursor", "commit", "rollback", "close")
+        missing = [
+            method
+            for method in required_methods
+            if not callable(getattr(connection, method, None))
+        ]
+        if missing:
             raise RedshiftConnectionError(
                 "Provided connection does not implement required interface. "
-                "Connection must have cursor(), commit(), rollback(), and close() methods."
+                f"Missing methods: {', '.join(missing)}"
             )
         self._connection = connection
 

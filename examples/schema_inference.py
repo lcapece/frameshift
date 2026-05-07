@@ -88,9 +88,9 @@ def main():
     print("-" * 40)
     print(schema.to_create_table_sql())
 
-    # Method 2: Use FrameShift API
+    # Method 2: Use FrameShift
     print("\n" + "=" * 60)
-    print("METHOD 2: FrameShift API")
+    print("METHOD 2: FrameShift")
     print("=" * 60)
 
     from unittest.mock import MagicMock

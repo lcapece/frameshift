@@ -1,18 +1,10 @@
-"""
-Basic usage example for Frameshift.
-
-This example demonstrates the fundamental operations:
-- Creating a connection
-- Loading a DataFrame
-- Handling results
-"""
+"""Basic usage example."""
 
 import pandas as pd
 from frameshift import FrameShift, FrameShiftConfig
 
 
 def main():
-    # Create sample data
     df = pd.DataFrame({
         'user_id': range(1, 101),
         'username': [f'user_{i}' for i in range(1, 101)],
@@ -27,8 +19,6 @@ def main():
     print(f"\nShape: {df.shape}")
     print(f"Dtypes:\n{df.dtypes}")
 
-    # Connect to Redshift
-    # Replace with your actual connection details
     fs = FrameShift(
         host='your-cluster.region.redshift.amazonaws.com',
         database='your_database',
@@ -37,7 +27,6 @@ def main():
         port=5439,
     )
 
-    # Option 1: Basic load (creates table if not exists)
     print("\n--- Loading data ---")
     result = fs.load(
         df,
@@ -46,7 +35,6 @@ def main():
     )
     print(result.summary())
 
-    # Option 2: Load with specific options
     print("\n--- Loading with options ---")
     result = fs.load(
         df,
@@ -57,7 +45,6 @@ def main():
     )
     print(result.summary())
 
-    # Option 3: Dry run (generate SQL without executing)
     print("\n--- Dry run (SQL preview) ---")
     config = FrameShiftConfig(dry_run=True)
     fs_dry = FrameShift(
@@ -74,7 +61,6 @@ def main():
             print(stmt[:500] + '...' if len(stmt) > 500 else stmt)
             print()
 
-    # Clean up
     fs.close()
 
 

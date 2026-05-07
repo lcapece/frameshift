@@ -100,9 +100,9 @@ def main():
     else:
         print("No natural keys found (try increasing max_columns)")
 
-    # Using FrameShift API
+    # Using FrameShift
     print("\n" + "=" * 60)
-    print("USING FRAMESHIFT API")
+    print("USING FRAMESHIFT")
     print("=" * 60)
 
     from unittest.mock import MagicMock
