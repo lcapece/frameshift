@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "frameshift"
-version = "0.1.0"
+version = "0.2.0"
 description = "Load pandas DataFrames into Amazon Redshift without S3 - using the somewhat-efficient multi-row INSERT statement AWS Redshift offers"
 readme = "README.md"
 license = {text = "MIT"}
