@@ -1,5 +1,7 @@
 """Tests for DataFrame chunking and SQL generation."""
 
+from unittest.mock import MagicMock
+
 import pandas as pd
 import pytest
 
@@ -154,6 +156,24 @@ class TestSQLGenerator:
         assert "(1, 'Alice', TRUE)" in sql
         assert "(2, 'Bob', FALSE)" in sql
         assert sql.endswith(";")
+
+    def test_batch_size_caps_rows_per_chunk(self):
+        """
+        batch_size is documented as rows per INSERT, and must behave as a
+        hard cap. It was previously used only to derive a loose ceiling
+        (initial_batch_size * 10), so a small batch_size was ignored
+        whenever the byte budget allowed more rows.
+        """
+        from frameshift import FrameShift, FrameShiftConfig
+
+        df = pd.DataFrame({"id": list(range(100))})
+        config = FrameShiftConfig(batch_size=10, dry_run=True)
+        fs = FrameShift(connection=MagicMock(), config=config)
+
+        result = fs.load(df, "t")
+
+        assert result.chunks_processed == 10
+        assert result.rows_loaded == 100
 
     def test_generate_insert_empty_df(self, generator):
         df = pd.DataFrame(columns=["id", "name", "active"])

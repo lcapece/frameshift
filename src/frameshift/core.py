@@ -148,6 +148,7 @@ class FrameShift:
         )
         self._chunker = DataFrameChunker(
             max_bytes=self.config.max_statement_bytes,
+            max_rows_per_chunk=self.config.batch_size,
             initial_batch_size=self.config.batch_size,
         )
         self._distribution_analyzer = DistributionAnalyzer()
@@ -189,6 +190,14 @@ class FrameShift:
         start_time = time.time()
         schema_name = schema_name or self.config.schema or "public"
 
+        if if_exists not in ("append", "replace", "fail"):
+            raise ValidationError(
+                f"Invalid if_exists value: {if_exists!r}",
+                field="if_exists",
+                expected="append, replace, or fail",
+                received=str(if_exists),
+            )
+
         errors: list[str] = []
         sql_statements: list[str] = []
         created_table = False
@@ -224,118 +233,27 @@ class FrameShift:
             if column_specs:
                 table_schema.columns = column_specs
 
-            # Get connection
-            with self._connection_manager.connection() as conn:
-                cursor = conn.cursor()
-
-                # Handle table existence
-                table_exists = self._table_exists(
-                    cursor, table_name, schema_name
+            # Dry runs never touch the connection: they render the same SQL
+            # the real path would execute and return it for inspection.
+            if self.config.dry_run:
+                sql_statements, rows_loaded, chunks_processed, created_table = (
+                    self._render_load_sql(df, table_schema, if_exists)
                 )
-
-                if table_exists:
-                    if if_exists == "fail":
-                        raise ValidationError(
-                            f"Table {schema_name}.{table_name} already exists",
-                            field="if_exists",
-                        )
-                    elif if_exists == "replace":
-                        drop_sql = f'DROP TABLE IF EXISTS "{schema_name}"."{table_name}"'
-                        if self.config.dry_run:
-                            sql_statements.append(drop_sql)
-                        else:
-                            cursor.execute(drop_sql)
-                        table_exists = False
-
-                if not table_exists:
-                    create_sql = table_schema.to_create_table_sql()
-                    if self.config.dry_run:
-                        sql_statements.append(create_sql)
-                    else:
-                        cursor.execute(create_sql)
-                        created_table = True
-
-                total_rows = len(df)
-
-                # Begin transaction if configured
-                if self.config.use_transactions and not self.config.dry_run:
-                    cursor.execute("BEGIN")
-
-                # Generate SQL and chunk data
-                sql_gen = SQLGenerator(
+            else:
+                (
+                    rows_loaded,
+                    chunks_processed,
+                    chunks_failed,
+                    created_table,
+                ) = self._execute_load(
+                    df=df,
+                    table_schema=table_schema,
                     table_name=table_name,
                     schema_name=schema_name,
-                    column_specs=table_schema.columns,
+                    if_exists=if_exists,
+                    errors=errors,
+                    progress_callback=progress_callback,
                 )
-
-                insert_prefix = sql_gen.generate_insert_prefix(
-                    self.config.include_columns
-                )
-                insert_prefix_size = len(insert_prefix.encode("utf-8"))
-
-                # Process chunks
-                commit_counter = 0
-
-                for chunk in self._chunker.chunk(
-                    df, table_schema.columns, insert_prefix_size
-                ):
-                    try:
-                        insert_sql = sql_gen.generate_insert_statement(
-                            chunk.data, self.config.include_columns
-                        )
-
-                        if self.config.dry_run:
-                            sql_statements.append(insert_sql)
-                        else:
-                            cursor.execute(insert_sql)
-
-                        rows_loaded += chunk.row_count
-                        chunks_processed += 1
-                        commit_counter += 1
-
-                        # Progress callback
-                        if progress_callback:
-                            progress_callback(
-                                rows_loaded, total_rows, chunks_processed
-                            )
-
-                        # Periodic commit
-                        if (
-                            self.config.commit_every > 0
-                            and commit_counter >= self.config.commit_every
-                            and not self.config.dry_run
-                        ):
-                            conn.commit()
-                            cursor.execute("BEGIN")
-                            commit_counter = 0
-
-                        # Log progress
-                        if self.config.verbosity >= 2:
-                            logger.debug(
-                                f"Chunk {chunks_processed}: "
-                                f"{chunk.row_count} rows "
-                                f"({rows_loaded}/{total_rows})"
-                            )
-
-                    except Exception as e:
-                        chunks_failed += 1
-                        error_msg = f"Chunk {chunk.chunk_index} failed: {e}"
-                        errors.append(error_msg)
-
-                        if self.config.on_error == "abort":
-                            raise InsertError(
-                                error_msg,
-                                table=f"{schema_name}.{table_name}",
-                                rows_attempted=chunk.row_count,
-                            )
-                        elif self.config.on_error == "log":
-                            logger.error(error_msg)
-
-                # Final commit
-                if self.config.use_transactions and not self.config.dry_run:
-                    conn.commit()
-
-                cursor.close()
 
         except FrameShiftError:
             raise
@@ -345,7 +263,7 @@ class FrameShift:
                 f"Load failed: {e}",
                 table=f"{schema_name}.{table_name}",
                 rows_inserted=rows_loaded,
-            )
+            ) from e
 
         elapsed = time.time() - start_time
         rows_per_sec = rows_loaded / elapsed if elapsed > 0 else 0
@@ -353,7 +271,7 @@ class FrameShift:
         return LoadResult(
             success=chunks_failed == 0,
             rows_loaded=rows_loaded,
-            rows_failed=len(df) - rows_loaded,
+            rows_failed=max(0, len(df) - rows_loaded),
             chunks_processed=chunks_processed,
             chunks_failed=chunks_failed,
             elapsed_seconds=elapsed,
@@ -363,6 +281,205 @@ class FrameShift:
             errors=errors,
             sql_statements=sql_statements if self.config.dry_run else None,
         )
+
+    def _render_load_sql(
+        self,
+        df: pd.DataFrame,
+        table_schema: TableSchema,
+        if_exists: str,
+    ) -> tuple[list[str], int, int, bool]:
+        """
+        Render the SQL a load would execute, without a database.
+
+        Returns:
+            A ``(statements, rows, chunks, created_table)`` tuple.
+        """
+        statements: list[str] = []
+
+        # Without a connection there is no way to know whether the table
+        # exists, so the rendering assumes it does not -- the case that
+        # produces the most SQL and is the most useful to review.
+        if if_exists == "replace":
+            statements.append(f"DROP TABLE IF EXISTS {table_schema.full_table_name};")
+        statements.append(table_schema.to_create_table_sql())
+        created_table = True
+
+        sql_gen = SQLGenerator(
+            table_name=table_schema.table_name,
+            schema_name=table_schema.schema_name,
+            column_specs=table_schema.columns,
+        )
+        prefix_size = len(
+            sql_gen.generate_insert_prefix(self.config.include_columns).encode("utf-8")
+        )
+
+        rows = 0
+        chunks = 0
+        for chunk in self._chunker.chunk(df, table_schema.columns, prefix_size):
+            statements.append(
+                sql_gen.generate_insert_statement(
+                    chunk.data, self.config.include_columns
+                )
+            )
+            rows += chunk.row_count
+            chunks += 1
+
+        return statements, rows, chunks, created_table
+
+    def _execute_load(
+        self,
+        df: pd.DataFrame,
+        table_schema: TableSchema,
+        table_name: str,
+        schema_name: str,
+        if_exists: str,
+        errors: list[str],
+        progress_callback: Callable[[int, int, int], None] | None,
+    ) -> tuple[int, int, int, bool]:
+        """
+        Execute a load against the database.
+
+        Returns:
+            A ``(rows_loaded, chunks_processed, chunks_failed, created_table)``
+            tuple.
+
+        Raises:
+            FrameShiftError: On validation failure, or on any chunk failure
+                when ``on_error`` is ``"abort"``.
+        """
+        rows_loaded = 0
+        chunks_processed = 0
+        chunks_failed = 0
+        created_table = False
+        total_rows = len(df)
+
+        with self._connection_manager.connection() as conn:
+            cursor = conn.cursor()
+            try:
+                if self._table_exists(cursor, table_name, schema_name):
+                    if if_exists == "fail":
+                        raise ValidationError(
+                            f"Table {schema_name}.{table_name} already exists",
+                            field="if_exists",
+                        )
+                    if if_exists == "replace":
+                        cursor.execute(
+                            f"DROP TABLE IF EXISTS {table_schema.full_table_name}"
+                        )
+                        cursor.execute(table_schema.to_create_table_sql())
+                        created_table = True
+                else:
+                    cursor.execute(table_schema.to_create_table_sql())
+                    created_table = True
+
+                sql_gen = SQLGenerator(
+                    table_name=table_name,
+                    schema_name=schema_name,
+                    column_specs=table_schema.columns,
+                )
+                prefix_size = len(
+                    sql_gen.generate_insert_prefix(
+                        self.config.include_columns
+                    ).encode("utf-8")
+                )
+
+                # A failed statement poisons the whole transaction, so each
+                # chunk runs inside a savepoint when the caller has asked for
+                # failures to be tolerated. Without one, the first bad chunk
+                # would abort the transaction and every subsequent chunk would
+                # fail too -- reporting N errors for a single root cause and
+                # loading nothing.
+                use_savepoints = self.config.on_error != "abort"
+                commit_counter = 0
+
+                for chunk in self._chunker.chunk(
+                    df, table_schema.columns, prefix_size
+                ):
+                    savepoint = f"frameshift_chunk_{chunk.chunk_index}"
+                    try:
+                        if use_savepoints:
+                            cursor.execute(f"SAVEPOINT {savepoint}")
+
+                        cursor.execute(
+                            sql_gen.generate_insert_statement(
+                                chunk.data, self.config.include_columns
+                            )
+                        )
+
+                        if use_savepoints:
+                            cursor.execute(f"RELEASE SAVEPOINT {savepoint}")
+
+                        rows_loaded += chunk.row_count
+                        chunks_processed += 1
+                        commit_counter += 1
+
+                        if progress_callback:
+                            progress_callback(
+                                rows_loaded, total_rows, chunks_processed
+                            )
+
+                        if (
+                            self.config.commit_every > 0
+                            and commit_counter >= self.config.commit_every
+                        ):
+                            conn.commit()
+                            commit_counter = 0
+
+                        if self.config.verbosity >= 2:
+                            logger.debug(
+                                "Chunk %d: %d rows (%d/%d)",
+                                chunks_processed,
+                                chunk.row_count,
+                                rows_loaded,
+                                total_rows,
+                            )
+
+                    except Exception as exc:
+                        chunks_failed += 1
+                        error_msg = (
+                            f"Chunk {chunk.chunk_index} "
+                            f"(rows {chunk.start_row}-{chunk.end_row}) failed: {exc}"
+                        )
+                        errors.append(error_msg)
+
+                        if self.config.on_error == "abort":
+                            raise InsertError(
+                                error_msg,
+                                table=f"{schema_name}.{table_name}",
+                                rows_attempted=chunk.row_count,
+                                rows_inserted=rows_loaded,
+                                sql_error=str(exc),
+                            ) from exc
+
+                        # Roll back just this chunk so the transaction stays
+                        # usable for the ones that follow.
+                        cursor.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                        cursor.execute(f"RELEASE SAVEPOINT {savepoint}")
+                        logger.error(error_msg)
+
+                conn.commit()
+
+            except Exception:
+                # Leave the connection clean: an uncommitted transaction would
+                # otherwise reject every later statement on this connection,
+                # which matters because connections are reused and may be the
+                # caller's own.
+                try:
+                    conn.rollback()
+                except Exception:  # pragma: no cover - driver-specific
+                    logger.warning(
+                        "Rollback failed after load error; connection may be "
+                        "in an unusable state",
+                        exc_info=True,
+                    )
+                raise
+            finally:
+                try:
+                    cursor.close()
+                except Exception:  # pragma: no cover - driver-specific
+                    pass
+
+        return rows_loaded, chunks_processed, chunks_failed, created_table
 
     def _table_exists(
         self, cursor: Any, table_name: str, schema_name: str
@@ -403,33 +520,27 @@ class FrameShift:
         """
         schema_name = schema_name or self.config.schema or "public"
 
-        config = self.config.copy(dry_run=True)
-        original_config = self.config
-        self.config = config
+        table_schema = self._schema_inferer.infer_schema(
+            df=df,
+            table_name=table_name,
+            schema_name=schema_name,
+            distkey=distkey,
+            sortkey=sortkey,
+            preserve_index=self.config.preserve_index,
+            auto_suggest_keys=False,
+        )
 
-        try:
-            result = self.load(
-                df=df,
-                table_name=table_name,
-                schema_name=schema_name,
-                if_exists="append",
-                distkey=distkey,
-                sortkey=sortkey,
-            )
+        statements, _, _, _ = self._render_load_sql(
+            df, table_schema, if_exists="append"
+        )
 
-            statements = result.sql_statements or []
+        if not include_create:
+            statements = [
+                s for s in statements
+                if not s.strip().upper().startswith(("CREATE", "DROP"))
+            ]
 
-            if not include_create and statements:
-                # Remove CREATE TABLE statement
-                statements = [
-                    s for s in statements
-                    if not s.strip().upper().startswith("CREATE")
-                ]
-
-            return statements
-
-        finally:
-            self.config = original_config
+        return statements
 
     def infer_schema(
         self,
@@ -562,22 +673,37 @@ class FrameShift:
             col_spec.name = str(col)
             columns.append(col_spec)
 
-        # Estimate chunking
-        estimates = self._chunker.estimate_chunks(df, columns)
+        # Account for the INSERT prefix, which consumes part of every
+        # statement's byte budget. Omitting it overstates how many rows fit
+        # in a chunk.
+        prefix_size = 0
+        if table_name:
+            sql_gen = SQLGenerator(
+                table_name=table_name,
+                schema_name=self.config.schema or "public",
+                column_specs=columns,
+            )
+            prefix_size = len(
+                sql_gen.generate_insert_prefix(
+                    self.config.include_columns
+                ).encode("utf-8")
+            )
 
-        # Add recommendations
+        estimates = self._chunker.estimate_chunks(df, columns, prefix_size)
+
         estimates["recommendations"] = []
 
-        if len(df) > 100000:
+        if len(df) > 100_000:
             estimates["recommendations"].append(
-                "Consider using COPY from S3 for better performance with "
-                f"{len(df):,} rows."
+                f"{len(df):,} rows is well beyond what INSERT-based loading is "
+                "good at. If you can reach S3, COPY will be far faster."
             )
 
         if estimates["estimated_chunks"] > 100:
             estimates["recommendations"].append(
-                f"Large number of chunks ({estimates['estimated_chunks']}). "
-                "This may take a while. Consider loading in batches."
+                f"This load would issue {estimates['estimated_chunks']} INSERT "
+                "statements. Expect it to be slow, and consider whether COPY "
+                "from S3 is available to you."
             )
 
         return estimates
