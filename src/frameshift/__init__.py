@@ -1,13 +1,27 @@
 """
-Frameshift: load pandas DataFrames into Amazon Redshift without S3.
+Frameshift: get a pandas DataFrame into Amazon Redshift without S3.
 
-Frameshift generates multi-row INSERT statements. It exists for
-environments where Redshift's COPY command is not an option -- no S3 write
-access, no permission to create a staging bucket, or a network path that
-does not reach S3 at all.
+For when you need data in Redshift and cannot use COPY -- no S3 write
+access, no network path to S3 from your VPC, or no time to get either
+approved. Frameshift talks to Redshift over the connection you already
+have, and needs nothing else.
 
-It is not a fast way to load Redshift, and it is not trying to be. If you
-can reach S3, use COPY. See the README for where the line falls.
+This is not a best practice and it is not for production. Loading Redshift
+with INSERT is the wrong way to load Redshift: the right way is COPY from
+S3, which ingests in parallel across every slice. Frameshift sends
+statements down one connection for the leader node to parse. It is the slow
+way, deliberately, because it is what is left when S3 is off the table.
+
+Use it to get out of a bind -- a one-off load, a lookup table, a test
+fixture, a locked-down environment. Do not schedule it nightly; if you find
+yourself doing that, go get S3 access.
+
+What it does promise is that the quick-and-dirty path is correct: values
+escaped properly, sensible inferred types with real DISTKEY/SORTKEY support,
+statements sized to fit Redshift's limits, and failures that roll back
+rather than leaving you half-loaded.
+
+If you can reach S3, use COPY.
 """
 
 from importlib.metadata import PackageNotFoundError, version
