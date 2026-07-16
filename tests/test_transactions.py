@@ -15,16 +15,20 @@ from frameshift import FrameShift, FrameShiftConfig
 from frameshift.exceptions import InsertError, ValidationError
 
 
+def _never_fail(_sql: str) -> bool:
+    return False
+
+
 class FakeCursor:
     """A cursor that records statements and can fail on cue."""
 
     def __init__(self, connection, fail_on=None, table_exists=False):
         self.connection = connection
-        self.fail_on = fail_on or (lambda sql: False)
+        self.fail_on = fail_on or _never_fail
         self.table_exists = table_exists
         self.closed = False
 
-    def execute(self, query, params=None):
+    def execute(self, query, params=None):  # noqa: ARG002 - DB-API signature
         self.connection.statements.append(query)
         if self.fail_on(query):
             raise RuntimeError("simulated server error")
@@ -55,9 +59,7 @@ class FakeConnection:
         self._table_exists = table_exists
 
     def cursor(self):
-        cur = FakeCursor(
-            self, fail_on=self._fail_on, table_exists=self._table_exists
-        )
+        cur = FakeCursor(self, fail_on=self._fail_on, table_exists=self._table_exists)
         self.cursors.append(cur)
         return cur
 
@@ -114,17 +116,15 @@ class TestSuccessfulLoad:
 
     def test_fail_when_table_exists(self, df):
         conn = FakeConnection(table_exists=True)
-        with FrameShift(connection=conn) as fs:
-            with pytest.raises(ValidationError):
-                fs.load(df, "t", if_exists="fail")
+        with FrameShift(connection=conn) as fs, pytest.raises(ValidationError):
+            fs.load(df, "t", if_exists="fail")
 
         assert conn.inserts() == []
 
     def test_invalid_if_exists_rejected(self, df):
         conn = FakeConnection()
-        with FrameShift(connection=conn) as fs:
-            with pytest.raises(ValidationError):
-                fs.load(df, "t", if_exists="upsert")
+        with FrameShift(connection=conn) as fs, pytest.raises(ValidationError):
+            fs.load(df, "t", if_exists="upsert")
 
     def test_cursor_is_closed(self, df):
         conn = FakeConnection()
@@ -142,26 +142,26 @@ class TestFailureHandling:
         the caller's own -- every later statement on it fails too.
         """
         conn = FakeConnection(fail_on=fail_on_inserts)
-        with FrameShift(connection=conn) as fs:
-            with pytest.raises(InsertError):
-                fs.load(df, "t")
+        with FrameShift(connection=conn) as fs, pytest.raises(InsertError):
+            fs.load(df, "t")
 
         assert conn.rollbacks == 1
         assert conn.commits == 0
 
     def test_abort_reports_row_range(self, df):
         conn = FakeConnection(fail_on=fail_on_inserts)
-        with FrameShift(connection=conn) as fs:
-            with pytest.raises(InsertError) as exc_info:
-                fs.load(df, "t")
+        with (
+            FrameShift(connection=conn) as fs,
+            pytest.raises(InsertError) as exc_info,
+        ):
+            fs.load(df, "t")
 
         assert "rows" in str(exc_info.value)
 
     def test_cursor_closed_on_failure(self, df):
         conn = FakeConnection(fail_on=fail_on_inserts)
-        with FrameShift(connection=conn) as fs:
-            with pytest.raises(InsertError):
-                fs.load(df, "t")
+        with FrameShift(connection=conn) as fs, pytest.raises(InsertError):
+            fs.load(df, "t")
 
         assert all(c.closed for c in conn.cursors)
 

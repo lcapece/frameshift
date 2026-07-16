@@ -27,7 +27,6 @@ from frameshift.identifiers import quote_identifier, quote_qualified_name
 from frameshift.schema import TableSchema
 from frameshift.types import ColumnSpec, RedshiftType, python_to_sql_value
 
-
 # --------------------------------------------------------------------------
 # A miniature SQL literal parser, used to verify escaping from the server's
 # point of view rather than by eyeballing backslashes.
@@ -192,9 +191,9 @@ class TestValueEscaping:
         """
         naive = "'" + "\\'; DROP TABLE users; --".replace("'", "''") + "'"
         _, escaped_remainder = parse_literal(naive, standard_conforming_strings=False)
-        assert escaped_remainder != "", (
-            "test premise is wrong: the naive rendering was expected to break out"
-        )
+        assert (
+            escaped_remainder != ""
+        ), "test premise is wrong: the naive rendering was expected to break out"
 
         safe = python_to_sql_value("\\'; DROP TABLE users; --", RedshiftType.VARCHAR)
         _, remainder = parse_literal(safe, standard_conforming_strings=False)
@@ -209,6 +208,7 @@ class TestValueEscaping:
         order has never been the vulnerability, and swapping it changes
         nothing.
         """
+
         def quotes_first(text: str) -> str:
             return text.replace("'", "''").replace("\\", "\\\\")
 
@@ -255,7 +255,10 @@ class TestSuperEscaping:
         ``pd.isna`` raises on list-like input rather than returning a bool,
         so containers must be checked before it is consulted.
         """
-        assert python_to_sql_value([1, 2, 3], RedshiftType.SUPER) == "JSON_PARSE('[1, 2, 3]')"
+        assert (
+            python_to_sql_value([1, 2, 3], RedshiftType.SUPER)
+            == "JSON_PARSE('[1, 2, 3]')"
+        )
         assert python_to_sql_value({}, RedshiftType.SUPER) == "JSON_PARSE('{}')"
 
 
@@ -297,7 +300,9 @@ class TestIdentifierValidation:
         assert quote_qualified_name("events") == '"events"'
 
     def test_injection_via_table_name_is_rejected(self):
-        generator = SQLGenerator(table_name='t" ; DROP TABLE x; --', schema_name="public")
+        generator = SQLGenerator(
+            table_name='t" ; DROP TABLE x; --', schema_name="public"
+        )
         with pytest.raises(ValidationError):
             _ = generator.full_table_name
 

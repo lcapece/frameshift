@@ -50,7 +50,9 @@ class RedshiftConnectionError(FrameShiftError):
         **kwargs: Any,
     ) -> None:
         details = {"host": host, "port": port, **kwargs}
-        super().__init__(message, details={k: v for k, v in details.items() if v is not None})
+        super().__init__(
+            message, details={k: v for k, v in details.items() if v is not None}
+        )
 
 
 class ChunkingError(FrameShiftError):
@@ -69,7 +71,9 @@ class ChunkingError(FrameShiftError):
         **kwargs: Any,
     ) -> None:
         details = {"row_index": row_index, "chunk_size": chunk_size, **kwargs}
-        super().__init__(message, details={k: v for k, v in details.items() if v is not None})
+        super().__init__(
+            message, details={k: v for k, v in details.items() if v is not None}
+        )
 
 
 class DataTypeError(FrameShiftError):
@@ -89,7 +93,9 @@ class DataTypeError(FrameShiftError):
         **kwargs: Any,
     ) -> None:
         details = {"column": column, "dtype": dtype, "value": repr(value), **kwargs}
-        super().__init__(message, details={k: v for k, v in details.items() if v is not None})
+        super().__init__(
+            message, details={k: v for k, v in details.items() if v is not None}
+        )
 
 
 class InsertError(FrameShiftError):
@@ -116,7 +122,9 @@ class InsertError(FrameShiftError):
             "sql_error": sql_error,
             **kwargs,
         }
-        super().__init__(message, details={k: v for k, v in details.items() if v is not None})
+        super().__init__(
+            message, details={k: v for k, v in details.items() if v is not None}
+        )
 
 
 class ValidationError(FrameShiftError):
@@ -136,4 +144,6 @@ class ValidationError(FrameShiftError):
         **kwargs: Any,
     ) -> None:
         details = {"field": field, "expected": expected, "received": received, **kwargs}
-        super().__init__(message, details={k: v for k, v in details.items() if v is not None})
+        super().__init__(
+            message, details={k: v for k, v in details.items() if v is not None}
+        )

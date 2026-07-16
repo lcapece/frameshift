@@ -3,10 +3,10 @@
 import pytest
 
 from frameshift.config import (
-    FrameShiftConfig,
-    MAX_STATEMENT_SIZE_BYTES,
-    DEFAULT_MAX_STATEMENT_SIZE,
     DATA_API_MAX_SIZE,
+    DEFAULT_MAX_STATEMENT_SIZE,
+    MAX_STATEMENT_SIZE_BYTES,
+    FrameShiftConfig,
 )
 
 

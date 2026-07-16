@@ -5,9 +5,9 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 
-from frameshift.chunker import DataFrameChunker, SQLGenerator, Chunk
-from frameshift.types import RedshiftType, ColumnSpec
+from frameshift.chunker import Chunk, DataFrameChunker, SQLGenerator
 from frameshift.exceptions import ChunkingError
+from frameshift.types import ColumnSpec, RedshiftType
 
 
 class TestDataFrameChunker:
@@ -30,11 +30,13 @@ class TestDataFrameChunker:
 
     @pytest.fixture
     def sample_df(self):
-        return pd.DataFrame({
-            "id": range(500),
-            "name": ["test_name"] * 500,
-            "value": [1.23456] * 500,
-        })
+        return pd.DataFrame(
+            {
+                "id": range(500),
+                "name": ["test_name"] * 500,
+                "value": [1.23456] * 500,
+            }
+        )
 
     def test_basic_chunking(self, chunker, sample_df, column_specs):
         chunks = list(chunker.chunk(sample_df, column_specs))
@@ -63,11 +65,13 @@ class TestDataFrameChunker:
         assert len(chunks) == 0
 
     def test_single_row(self, chunker, column_specs):
-        df = pd.DataFrame({
-            "id": [1],
-            "name": ["test"],
-            "value": [1.0],
-        })
+        df = pd.DataFrame(
+            {
+                "id": [1],
+                "name": ["test"],
+                "value": [1.0],
+            }
+        )
         chunks = list(chunker.chunk(df, column_specs))
 
         assert len(chunks) == 1
@@ -75,11 +79,13 @@ class TestDataFrameChunker:
 
     def test_chunk_size_respects_limit(self, chunker, column_specs):
         # Create larger dataset
-        df = pd.DataFrame({
-            "id": range(1000),
-            "name": ["x" * 50] * 1000,  # Larger strings
-            "value": [1.23456789] * 1000,
-        })
+        df = pd.DataFrame(
+            {
+                "id": range(1000),
+                "name": ["x" * 50] * 1000,  # Larger strings
+                "value": [1.23456789] * 1000,
+            }
+        )
         chunks = list(chunker.chunk(df, column_specs))
 
         for chunk in chunks:
@@ -100,9 +106,11 @@ class TestDataFrameChunker:
         column_specs = [
             ColumnSpec("data", RedshiftType.VARCHAR, length=1000),
         ]
-        df = pd.DataFrame({
-            "data": ["x" * 100],  # Row larger than limit
-        })
+        df = pd.DataFrame(
+            {
+                "data": ["x" * 100],  # Row larger than limit
+            }
+        )
 
         with pytest.raises(ChunkingError):
             list(chunker.chunk(df, column_specs))
@@ -144,11 +152,13 @@ class TestSQLGenerator:
         assert "VALUES" in prefix
 
     def test_generate_insert_statement(self, generator):
-        df = pd.DataFrame({
-            "id": [1, 2],
-            "name": ["Alice", "Bob"],
-            "active": [True, False],
-        })
+        df = pd.DataFrame(
+            {
+                "id": [1, 2],
+                "name": ["Alice", "Bob"],
+                "active": [True, False],
+            }
+        )
         sql = generator.generate_insert_statement(df)
 
         assert "INSERT INTO" in sql
@@ -182,32 +192,38 @@ class TestSQLGenerator:
         assert sql == ""
 
     def test_generate_values_only(self, generator):
-        df = pd.DataFrame({
-            "id": [1],
-            "name": ["Test"],
-            "active": [True],
-        })
+        df = pd.DataFrame(
+            {
+                "id": [1],
+                "name": ["Test"],
+                "active": [True],
+            }
+        )
         values = generator.generate_values_only(df)
 
         assert "INSERT" not in values
         assert "(1, 'Test', TRUE)" in values
 
     def test_special_character_escaping(self, generator):
-        df = pd.DataFrame({
-            "id": [1],
-            "name": ["O'Brien"],
-            "active": [True],
-        })
+        df = pd.DataFrame(
+            {
+                "id": [1],
+                "name": ["O'Brien"],
+                "active": [True],
+            }
+        )
         sql = generator.generate_insert_statement(df)
 
         assert "'O''Brien'" in sql  # Doubled quote, per QUOTE_LITERAL
 
     def test_null_values(self, generator):
-        df = pd.DataFrame({
-            "id": [1],
-            "name": [None],
-            "active": [True],
-        })
+        df = pd.DataFrame(
+            {
+                "id": [1],
+                "name": [None],
+                "active": [True],
+            }
+        )
         sql = generator.generate_insert_statement(df)
 
         assert "NULL" in sql

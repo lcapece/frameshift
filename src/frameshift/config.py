@@ -58,7 +58,9 @@ class FrameShiftConfig:
         if self.batch_size < 1:
             raise ValueError("batch_size must be at least 1")
         if self.on_error not in ("abort", "skip", "log"):
-            raise ValueError(f"on_error must be 'abort', 'skip', or 'log', got {self.on_error}")
+            raise ValueError(
+                f"on_error must be 'abort', 'skip', or 'log', got {self.on_error}"
+            )
         if self.varchar_max_length < 1 or self.varchar_max_length > 65535:
             raise ValueError("varchar_max_length must be between 1 and 65535")
 

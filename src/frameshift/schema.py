@@ -10,9 +10,9 @@ from typing import Any
 
 import pandas as pd
 
-from frameshift.types import ColumnSpec, RedshiftType, infer_redshift_type
-from frameshift.identifiers import quote_identifier, quote_qualified_name
 from frameshift.exceptions import ValidationError
+from frameshift.identifiers import quote_identifier, quote_qualified_name
+from frameshift.types import ColumnSpec, RedshiftType, infer_redshift_type
 
 
 @dataclass
@@ -116,12 +116,11 @@ class TableSchema:
 
         # Unique constraints
         for unique_cols in self.unique_keys:
-            uk_cols = ", ".join(
-                quote_identifier(c, kind="column") for c in unique_cols
-            )
+            uk_cols = ", ".join(quote_identifier(c, kind="column") for c in unique_cols)
             col_defs.append(f"UNIQUE ({uk_cols})")
 
-        parts.append(f"(\n  {',\n  '.join(col_defs)}\n)")
+        joined_defs = ",\n  ".join(col_defs)
+        parts.append("(\n  " + joined_defs + "\n)")
 
         # Table properties
         table_props = []
@@ -273,15 +272,15 @@ class SchemaInferer:
                 sortkey_list = self._suggest_sortkey(df, columns)
 
         # Update column specs with key information
-        for col in columns:
-            if col.name == distkey:
-                col.is_distkey = True
-            if col.name in sortkey_list:
-                col.is_sortkey = True
-                col.sortkey_position = sortkey_list.index(col.name) + 1
-            if col.name in pk_list or col.name in uk_list:
-                col.is_unique = True
-                col.nullable = False
+        for col_spec in columns:
+            if col_spec.name == distkey:
+                col_spec.is_distkey = True
+            if col_spec.name in sortkey_list:
+                col_spec.is_sortkey = True
+                col_spec.sortkey_position = sortkey_list.index(col_spec.name) + 1
+            if col_spec.name in pk_list or col_spec.name in uk_list:
+                col_spec.is_unique = True
+                col_spec.nullable = False
 
         return TableSchema(
             table_name=table_name,
@@ -293,9 +292,7 @@ class SchemaInferer:
             unique_keys=[uk_list] if uk_list else [],
         )
 
-    def _normalize_key_list(
-        self, keys: list[str] | str | None
-    ) -> list[str]:
+    def _normalize_key_list(self, keys: list[str] | str | None) -> list[str]:
         """Convert key specification to list."""
         if keys is None:
             return []
@@ -460,9 +457,7 @@ class SchemaInferer:
         Returns:
             Dictionary with recommendations and explanations.
         """
-        schema = self.infer_schema(
-            df, table_name, auto_suggest_keys=True
-        )
+        schema = self.infer_schema(df, table_name, auto_suggest_keys=True)
 
         recommendations = {
             "table_name": table_name,
@@ -493,11 +488,23 @@ class SchemaInferer:
 
             col_info = {
                 "name": col_spec.name,
-                "pandas_dtype": str(df[col_spec.name].dtype) if col_spec.name in df.columns else "index",
+                "pandas_dtype": (
+                    str(df[col_spec.name].dtype)
+                    if col_spec.name in df.columns
+                    else "index"
+                ),
                 "redshift_type": type_str,
                 "nullable": col_spec.nullable,
-                "null_count": int(df[col_spec.name].isna().sum()) if col_spec.name in df.columns else 0,
-                "unique_count": int(df[col_spec.name].nunique()) if col_spec.name in df.columns else 0,
+                "null_count": (
+                    int(df[col_spec.name].isna().sum())
+                    if col_spec.name in df.columns
+                    else 0
+                ),
+                "unique_count": (
+                    int(df[col_spec.name].nunique())
+                    if col_spec.name in df.columns
+                    else 0
+                ),
             }
             recommendations["columns"].append(col_info)
 

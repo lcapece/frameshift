@@ -3,9 +3,9 @@
 import pandas as pd
 import pytest
 
-from frameshift.schema import SchemaInferer, TableSchema
-from frameshift.types import RedshiftType, ColumnSpec
 from frameshift.exceptions import ValidationError
+from frameshift.schema import SchemaInferer, TableSchema
+from frameshift.types import ColumnSpec, RedshiftType
 
 
 class TestTableSchema:
@@ -167,13 +167,21 @@ class TestSchemaInferer:
 
     @pytest.fixture
     def sample_df(self):
-        return pd.DataFrame({
-            "user_id": [1, 2, 3, 4, 5],
-            "email": ["a@test.com", "b@test.com", "c@test.com", "d@test.com", "e@test.com"],
-            "created_at": pd.date_range("2024-01-01", periods=5),
-            "score": [1.1, 2.2, 3.3, 4.4, 5.5],
-            "active": [True, False, True, True, False],
-        })
+        return pd.DataFrame(
+            {
+                "user_id": [1, 2, 3, 4, 5],
+                "email": [
+                    "a@test.com",
+                    "b@test.com",
+                    "c@test.com",
+                    "d@test.com",
+                    "e@test.com",
+                ],
+                "created_at": pd.date_range("2024-01-01", periods=5),
+                "score": [1.1, 2.2, 3.3, 4.4, 5.5],
+                "active": [True, False, True, True, False],
+            }
+        )
 
     def test_basic_inference(self, inferer, sample_df):
         schema = inferer.infer_schema(sample_df, "users")
@@ -190,9 +198,7 @@ class TestSchemaInferer:
         assert col_types["active"] == RedshiftType.BOOLEAN
 
     def test_explicit_distkey(self, inferer, sample_df):
-        schema = inferer.infer_schema(
-            sample_df, "users", distkey="user_id"
-        )
+        schema = inferer.infer_schema(sample_df, "users", distkey="user_id")
 
         assert schema.distkey == "user_id"
 
@@ -201,9 +207,7 @@ class TestSchemaInferer:
         assert user_id_col.is_distkey
 
     def test_explicit_sortkey(self, inferer, sample_df):
-        schema = inferer.infer_schema(
-            sample_df, "users", sortkey=["created_at"]
-        )
+        schema = inferer.infer_schema(sample_df, "users", sortkey=["created_at"])
 
         assert schema.sortkey == ["created_at"]
 
@@ -212,9 +216,7 @@ class TestSchemaInferer:
         assert created_at_col.sortkey_position == 1
 
     def test_auto_suggest_keys(self, inferer, sample_df):
-        schema = inferer.infer_schema(
-            sample_df, "users", auto_suggest_keys=True
-        )
+        schema = inferer.infer_schema(sample_df, "users", auto_suggest_keys=True)
 
         # Should suggest user_id as distkey (high cardinality, id pattern)
         assert schema.distkey == "user_id"
@@ -223,9 +225,7 @@ class TestSchemaInferer:
         assert "created_at" in schema.sortkey
 
     def test_primary_key(self, inferer, sample_df):
-        schema = inferer.infer_schema(
-            sample_df, "users", primary_key="user_id"
-        )
+        schema = inferer.infer_schema(sample_df, "users", primary_key="user_id")
 
         assert schema.primary_key == ["user_id"]
 
@@ -248,12 +248,9 @@ class TestSchemaInferer:
 
     def test_preserve_index(self, inferer):
         df = pd.DataFrame(
-            {"value": [1, 2, 3]},
-            index=pd.Index([10, 20, 30], name="my_index")
+            {"value": [1, 2, 3]}, index=pd.Index([10, 20, 30], name="my_index")
         )
-        schema = inferer.infer_schema(
-            df, "test", preserve_index=True
-        )
+        schema = inferer.infer_schema(df, "test", preserve_index=True)
 
         col_names = [c.name for c in schema.columns]
         assert "my_index" in col_names

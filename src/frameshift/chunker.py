@@ -6,15 +6,16 @@ Redshift's 16 MB SQL statement size limit.
 """
 
 import math
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator, Any
+from typing import Any
 
 import pandas as pd
 
 from frameshift.config import MAX_STATEMENT_SIZE_BYTES
-from frameshift.types import ColumnSpec, python_to_sql_value
-from frameshift.identifiers import quote_identifier, quote_qualified_name
 from frameshift.exceptions import ChunkingError
+from frameshift.identifiers import quote_identifier, quote_qualified_name
+from frameshift.types import ColumnSpec, python_to_sql_value
 
 
 @dataclass
@@ -373,8 +374,7 @@ class SQLGenerator:
         """
         if include_columns and self.column_specs:
             col_names = ", ".join(
-                quote_identifier(col.name, kind="column")
-                for col in self.column_specs
+                quote_identifier(col.name, kind="column") for col in self.column_specs
             )
             return f"INSERT INTO {self.full_table_name} ({col_names}) VALUES\n"
         return f"INSERT INTO {self.full_table_name} VALUES\n"

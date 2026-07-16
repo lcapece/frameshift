@@ -157,7 +157,9 @@ class ColumnSpec:
         # Default value. Rendered as a typed literal rather than raw text so
         # that a caller-supplied default cannot inject DDL.
         if self.default is not None:
-            parts.append(f"DEFAULT {python_to_sql_value(self.default, self.redshift_type)}")
+            parts.append(
+                f"DEFAULT {python_to_sql_value(self.default, self.redshift_type)}"
+            )
 
         # Encoding
         if self.encode:
@@ -242,6 +244,14 @@ def infer_redshift_type(
             nullable=nullable,
         )
 
+    # Object columns carry no type information in the dtype, so their
+    # contents have to be inspected. This must happen before the dtype
+    # mapping is consulted: "object" is mapped to VARCHAR there, and
+    # checking the mapping first would classify every dict, list, and
+    # bytes column as text.
+    if dtype_str == "object":
+        return _infer_object_type(series, col_name, nullable, varchar_max_length)
+
     # Check mapping
     if dtype_str in DTYPE_MAPPING:
         redshift_type = DTYPE_MAPPING[dtype_str]
@@ -261,10 +271,6 @@ def infer_redshift_type(
             redshift_type=redshift_type,
             nullable=nullable,
         )
-
-    # Handle object dtype with more inspection
-    if dtype_str == "object":
-        return _infer_object_type(series, col_name, nullable, varchar_max_length)
 
     # Default to VARCHAR for unknown types
     return ColumnSpec(
@@ -296,9 +302,7 @@ def _calculate_varchar_length(series: pd.Series, max_length: int) -> int:
         return 256  # Nothing to measure; a small default is fine.
 
     try:
-        max_observed = max(
-            len(str(value).encode("utf-8")) for value in non_null
-        )
+        max_observed = max(len(str(value).encode("utf-8")) for value in non_null)
     except (TypeError, ValueError):
         return min(256, max_length)
 
@@ -313,6 +317,30 @@ def _calculate_varchar_length(series: pd.Series, max_length: int) -> int:
             return min(boundary, max_length)
 
     return min(buffered, max_length)
+
+
+def _all_boolean_like(sample: pd.Series) -> bool:
+    """
+    Report whether every value in a sample is recognizably boolean.
+
+    Only genuine bools and the conventional string spellings qualify.
+    Numeric 1/0 is deliberately excluded: a column of integer flags is far
+    more often a count, an id, or an enum than a boolean, and inferring
+    BOOLEAN would coerce it irreversibly. Callers who want that can pass an
+    explicit ``ColumnSpec``.
+
+    Values are examined individually rather than via a set membership test.
+    In Python ``True == 1`` and ``False == 0``, so a literal such as
+    ``{True, False, 1, 0}`` collapses to two elements and would match
+    integer data by accident.
+    """
+    for value in sample:
+        if isinstance(value, (bool, np.bool_)):
+            continue
+        if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+            continue
+        return False
+    return True
 
 
 def _infer_object_type(
@@ -336,12 +364,12 @@ def _infer_object_type(
     sample = non_null.head(1000)
     first_val = sample.iloc[0]
 
-    # Check for boolean-like
-    unique_vals = set(sample.unique())
-    if unique_vals <= {True, False, "true", "false", "True", "False", 1, 0, "1", "0"}:
+    # Containers first: they are unhashable, so any check that goes through
+    # Series.unique() would raise on them.
+    if isinstance(first_val, (dict, list)):
         return ColumnSpec(
             name=col_name,
-            redshift_type=RedshiftType.BOOLEAN,
+            redshift_type=RedshiftType.SUPER,
             nullable=nullable,
         )
 
@@ -353,11 +381,10 @@ def _infer_object_type(
             nullable=nullable,
         )
 
-    # Check for dict/list (JSON-like) - use SUPER
-    if isinstance(first_val, (dict, list)):
+    if _all_boolean_like(sample):
         return ColumnSpec(
             name=col_name,
-            redshift_type=RedshiftType.SUPER,
+            redshift_type=RedshiftType.BOOLEAN,
             nullable=nullable,
         )
 
@@ -470,6 +497,20 @@ def python_to_sql_value(value: Any, redshift_type: RedshiftType) -> str:
         return "NULL"
 
     if redshift_type == RedshiftType.BOOLEAN:
+        # Strings must be interpreted, not tested for truthiness: every
+        # non-empty string is truthy, so bool("false") is True and a column
+        # of "true"/"false" strings would load as all TRUE.
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in ("true", "t", "yes", "y", "1"):
+                return "TRUE"
+            if normalized in ("false", "f", "no", "n", "0"):
+                return "FALSE"
+            raise DataTypeError(
+                f"Cannot interpret {value!r} as a boolean",
+                dtype=redshift_type.value,
+                value=value,
+            )
         return "TRUE" if value else "FALSE"
 
     if redshift_type in (

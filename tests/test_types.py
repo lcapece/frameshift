@@ -4,13 +4,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from frameshift.exceptions import DataTypeError, ValidationError
 from frameshift.types import (
-    RedshiftType,
     ColumnSpec,
+    RedshiftType,
     infer_redshift_type,
     python_to_sql_value,
 )
-from frameshift.exceptions import ValidationError
 
 
 class TestColumnSpec:
@@ -98,6 +98,26 @@ class TestInferRedshiftType:
         spec = infer_redshift_type(series)
         assert spec.redshift_type == RedshiftType.BOOLEAN
 
+    def test_object_column_of_bools_is_boolean(self):
+        series = pd.Series([True, False, True], dtype="object")
+        assert infer_redshift_type(series).redshift_type == RedshiftType.BOOLEAN
+
+    def test_string_booleans_are_boolean(self):
+        series = pd.Series(["true", "false", "true"], dtype="object")
+        assert infer_redshift_type(series).redshift_type == RedshiftType.BOOLEAN
+
+    def test_integer_flags_are_not_inferred_as_boolean(self):
+        """
+        A column of 1/0 integers is usually a count, id, or enum -- not a
+        boolean. Inferring BOOLEAN would coerce the data irreversibly, so
+        only genuine bools and boolean strings qualify.
+        """
+        series = pd.Series([1, 0, 1, 0], dtype="object")
+        assert infer_redshift_type(series).redshift_type != RedshiftType.BOOLEAN
+
+        typed = pd.Series([1, 0, 1, 0], dtype="int64")
+        assert infer_redshift_type(typed).redshift_type == RedshiftType.BIGINT
+
     def test_datetime_type(self):
         series = pd.Series(pd.date_range("2024-01-01", periods=3))
         spec = infer_redshift_type(series)
@@ -136,6 +156,23 @@ class TestPythonToSqlValue:
         assert python_to_sql_value(True, RedshiftType.BOOLEAN) == "TRUE"
         assert python_to_sql_value(False, RedshiftType.BOOLEAN) == "FALSE"
 
+    def test_string_booleans_are_interpreted_not_truthy(self):
+        """
+        Every non-empty string is truthy, so testing `if value` would render
+        "false" as TRUE and silently invert the column.
+        """
+        assert python_to_sql_value("false", RedshiftType.BOOLEAN) == "FALSE"
+        assert python_to_sql_value("False", RedshiftType.BOOLEAN) == "FALSE"
+        assert python_to_sql_value("f", RedshiftType.BOOLEAN) == "FALSE"
+        assert python_to_sql_value("no", RedshiftType.BOOLEAN) == "FALSE"
+        assert python_to_sql_value("0", RedshiftType.BOOLEAN) == "FALSE"
+        assert python_to_sql_value("true", RedshiftType.BOOLEAN) == "TRUE"
+        assert python_to_sql_value("yes", RedshiftType.BOOLEAN) == "TRUE"
+
+    def test_uninterpretable_boolean_raises(self):
+        with pytest.raises(DataTypeError):
+            python_to_sql_value("maybe", RedshiftType.BOOLEAN)
+
     def test_integer_values(self):
         assert python_to_sql_value(42, RedshiftType.INTEGER) == "42"
         assert python_to_sql_value(42.9, RedshiftType.INTEGER) == "42"
@@ -154,7 +191,9 @@ class TestPythonToSqlValue:
         )
 
     def test_nan_becomes_null(self):
-        assert python_to_sql_value(float("nan"), RedshiftType.DOUBLE_PRECISION) == "NULL"
+        assert (
+            python_to_sql_value(float("nan"), RedshiftType.DOUBLE_PRECISION) == "NULL"
+        )
 
     def test_string_escaping(self):
         # Escaping matches Redshift's QUOTE_LITERAL: both single quotes and

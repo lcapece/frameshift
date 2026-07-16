@@ -1,28 +1,33 @@
 """Core DataFrame loading for Redshift."""
 
-from dataclasses import dataclass
-from typing import Any, Callable
+import contextlib
 import logging
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 import pandas as pd
 
+from frameshift.analyzer import (
+    DistributionAnalysis,
+    DistributionAnalyzer,
+    UniqueKeyValidation,
+    UniqueKeyValidator,
+)
+from frameshift.chunker import DataFrameChunker, SQLGenerator
 from frameshift.config import FrameShiftConfig
 from frameshift.connection import (
-    ConnectionManager,
     DBConnection,
     create_connection_manager,
 )
-from frameshift.schema import SchemaInferer, TableSchema
-from frameshift.chunker import DataFrameChunker, SQLGenerator, Chunk
-from frameshift.analyzer import DistributionAnalyzer, UniqueKeyValidator
-from frameshift.types import ColumnSpec, infer_redshift_type
 from frameshift.exceptions import (
     FrameShiftError,
     InsertError,
     ValidationError,
 )
-
+from frameshift.schema import SchemaInferer, TableSchema
+from frameshift.types import ColumnSpec, infer_redshift_type
 
 logger = logging.getLogger(__name__)
 
@@ -378,9 +383,9 @@ class FrameShift:
                     column_specs=table_schema.columns,
                 )
                 prefix_size = len(
-                    sql_gen.generate_insert_prefix(
-                        self.config.include_columns
-                    ).encode("utf-8")
+                    sql_gen.generate_insert_prefix(self.config.include_columns).encode(
+                        "utf-8"
+                    )
                 )
 
                 # A failed statement poisons the whole transaction, so each
@@ -392,9 +397,7 @@ class FrameShift:
                 use_savepoints = self.config.on_error != "abort"
                 commit_counter = 0
 
-                for chunk in self._chunker.chunk(
-                    df, table_schema.columns, prefix_size
-                ):
+                for chunk in self._chunker.chunk(df, table_schema.columns, prefix_size):
                     savepoint = f"frameshift_chunk_{chunk.chunk_index}"
                     try:
                         if use_savepoints:
@@ -414,9 +417,7 @@ class FrameShift:
                         commit_counter += 1
 
                         if progress_callback:
-                            progress_callback(
-                                rows_loaded, total_rows, chunks_processed
-                            )
+                            progress_callback(rows_loaded, total_rows, chunks_processed)
 
                         if (
                             self.config.commit_every > 0
@@ -474,16 +475,14 @@ class FrameShift:
                     )
                 raise
             finally:
-                try:
+                # A cursor that will not close is not worth failing the load
+                # over, and would mask the original error.
+                with contextlib.suppress(Exception):
                     cursor.close()
-                except Exception:  # pragma: no cover - driver-specific
-                    pass
 
         return rows_loaded, chunks_processed, chunks_failed, created_table
 
-    def _table_exists(
-        self, cursor: Any, table_name: str, schema_name: str
-    ) -> bool:
+    def _table_exists(self, cursor: Any, table_name: str, schema_name: str) -> bool:
         """Check if a table exists."""
         query = """
             SELECT 1 FROM information_schema.tables
@@ -536,7 +535,8 @@ class FrameShift:
 
         if not include_create:
             statements = [
-                s for s in statements
+                s
+                for s in statements
                 if not s.strip().upper().startswith(("CREATE", "DROP"))
             ]
 
@@ -579,7 +579,7 @@ class FrameShift:
         df: pd.DataFrame,
         column: str,
         slice_count: int = 16,
-    ):
+    ) -> DistributionAnalysis:
         """
         Analyze distribution characteristics of a column.
 
@@ -621,7 +621,7 @@ class FrameShift:
         self,
         df: pd.DataFrame,
         columns: list[str] | str,
-    ):
+    ) -> UniqueKeyValidation:
         """
         Validate that columns form a unique key.
 
@@ -684,9 +684,9 @@ class FrameShift:
                 column_specs=columns,
             )
             prefix_size = len(
-                sql_gen.generate_insert_prefix(
-                    self.config.include_columns
-                ).encode("utf-8")
+                sql_gen.generate_insert_prefix(self.config.include_columns).encode(
+                    "utf-8"
+                )
             )
 
         estimates = self._chunker.estimate_chunks(df, columns, prefix_size)
