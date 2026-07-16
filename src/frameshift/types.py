@@ -12,6 +12,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from frameshift.exceptions import DataTypeError, ValidationError
+from frameshift.identifiers import quote_identifier
+
 
 class RedshiftType(Enum):
     """Enumeration of Redshift data types."""
@@ -44,6 +47,51 @@ class RedshiftType(Enum):
 
     # Special types
     SUPER = "SUPER"  # For JSON/semi-structured data
+
+
+# Compression encodings Redshift accepts in an ENCODE clause. Anything
+# outside this set is rejected rather than interpolated into DDL.
+VALID_ENCODINGS = frozenset(
+    {
+        "RAW",
+        "AZ64",
+        "BYTEDICT",
+        "DELTA",
+        "DELTA32K",
+        "LZO",
+        "MOSTLY8",
+        "MOSTLY16",
+        "MOSTLY32",
+        "RUNLENGTH",
+        "TEXT255",
+        "TEXT32K",
+        "ZSTD",
+    }
+)
+
+
+def _validate_encoding(encode: str) -> str:
+    """
+    Validate a compression encoding against Redshift's documented set.
+
+    Args:
+        encode: The encoding name, in any case.
+
+    Returns:
+        The encoding, upper-cased.
+
+    Raises:
+        ValidationError: If the encoding is not recognized.
+    """
+    normalized = str(encode).strip().upper()
+    if normalized not in VALID_ENCODINGS:
+        raise ValidationError(
+            f"Unknown compression encoding {encode!r}",
+            field="encode",
+            expected=", ".join(sorted(VALID_ENCODINGS)),
+            received=str(encode),
+        )
+    return normalized
 
 
 @dataclass
@@ -80,8 +128,13 @@ class ColumnSpec:
     encode: str | None = None
 
     def to_sql(self) -> str:
-        """Generate SQL column definition."""
-        parts = [f'"{self.name}"']
+        """
+        Generate the SQL column definition.
+
+        Raises:
+            ValidationError: If the column name is not a safe identifier.
+        """
+        parts = [quote_identifier(self.name, kind="column")]
 
         # Type with length/precision
         if self.redshift_type in (RedshiftType.VARCHAR, RedshiftType.CHAR):
@@ -101,13 +154,14 @@ class ColumnSpec:
         if not self.nullable:
             parts.append("NOT NULL")
 
-        # Default value
+        # Default value. Rendered as a typed literal rather than raw text so
+        # that a caller-supplied default cannot inject DDL.
         if self.default is not None:
-            parts.append(f"DEFAULT {self.default}")
+            parts.append(f"DEFAULT {python_to_sql_value(self.default, self.redshift_type)}")
 
         # Encoding
         if self.encode:
-            parts.append(f"ENCODE {self.encode}")
+            parts.append(f"ENCODE {_validate_encoding(self.encode)}")
 
         return " ".join(parts)
 
@@ -222,41 +276,43 @@ def infer_redshift_type(
 
 
 def _calculate_varchar_length(series: pd.Series, max_length: int) -> int:
-    """Calculate the appropriate VARCHAR length for a series."""
-    if series.dropna().empty:
-        return 256  # Default for empty series
+    """
+    Calculate the appropriate VARCHAR length for a series.
 
-    # Get max string length
+    Redshift's VARCHAR(n) bounds n *bytes*, not characters, so length is
+    measured over UTF-8 encoded values. Measuring characters undersizes any
+    column holding non-ASCII text -- a single emoji is four bytes -- and the
+    load then fails on data that inference claimed would fit.
+
+    Args:
+        series: The series to measure.
+        max_length: The configured ceiling for VARCHAR length.
+
+    Returns:
+        A VARCHAR length in bytes, rounded up to a conventional boundary.
+    """
+    non_null = series.dropna()
+    if non_null.empty:
+        return 256  # Nothing to measure; a small default is fine.
+
     try:
-        str_series = series.dropna().astype(str)
-        max_observed = str_series.str.len().max()
+        max_observed = max(
+            len(str(value).encode("utf-8")) for value in non_null
+        )
+    except (TypeError, ValueError):
+        return min(256, max_length)
 
-        # Add 20% buffer, round up to next power of 2 or nice number
-        buffered = int(max_observed * 1.2)
+    if max_observed == 0:
+        return 16
 
-        # Round to nice boundaries
-        if buffered <= 16:
-            return 16
-        elif buffered <= 32:
-            return 32
-        elif buffered <= 64:
-            return 64
-        elif buffered <= 128:
-            return 128
-        elif buffered <= 256:
-            return 256
-        elif buffered <= 512:
-            return 512
-        elif buffered <= 1024:
-            return 1024
-        elif buffered <= 4096:
-            return 4096
-        elif buffered <= 16384:
-            return 16384
-        else:
-            return min(buffered, max_length)
-    except Exception:
-        return 256
+    # 20% headroom for values not present in this particular DataFrame.
+    buffered = int(max_observed * 1.2) + 1
+
+    for boundary in (16, 32, 64, 128, 256, 512, 1024, 4096, 16384):
+        if buffered <= boundary:
+            return min(boundary, max_length)
+
+    return min(buffered, max_length)
 
 
 def _infer_object_type(
@@ -325,9 +381,79 @@ def _infer_object_type(
     )
 
 
+def _is_null(value: Any) -> bool:
+    """
+    Determine whether a value should be rendered as SQL NULL.
+
+    ``pd.isna`` raises on list- and dict-like input rather than returning a
+    scalar, so container types (which reach us via the SUPER path) are
+    checked before it is called.
+    """
+    if value is None:
+        return True
+
+    if isinstance(value, (list, tuple, set, dict, np.ndarray)):
+        # A container is a value in its own right; only None is null.
+        return False
+
+    try:
+        result = pd.isna(value)
+    except (TypeError, ValueError):
+        return False
+
+    # pd.isna returns an array for some inputs; treat those as non-null.
+    return bool(result) if isinstance(result, (bool, np.bool_)) else False
+
+
+def escape_string_literal(value: str) -> str:
+    """
+    Render a string as a complete, quoted SQL string literal.
+
+    The escaping matches Redshift's own ``QUOTE_LITERAL`` function, which
+    "appropriately doubles any embedded single quotation marks and
+    backslashes" and returns a plain ``'...'`` literal. Both characters are
+    doubled because Redshift -- forked from PostgreSQL 8.0, before the 9.1
+    change of ``standard_conforming_strings`` to ``on`` -- treats a
+    backslash inside an ordinary literal as an escape character.
+
+    That last point is the reason this function exists rather than a bare
+    ``f"'{value}'"``. On Redshift a lone backslash escapes whatever follows
+    it, so an unescaped ``\\'`` in a value would consume the closing quote
+    and let the rest of the cell parse as SQL.
+
+    Do not "modernize" this to leave backslashes alone: that is correct for
+    current PostgreSQL and wrong for Redshift, and it would reopen the
+    breakout described above. The property is covered from both server
+    modes in ``tests/test_injection.py``.
+
+    Args:
+        value: The raw string to render.
+
+    Returns:
+        A complete SQL literal, including the surrounding single quotes.
+
+    Raises:
+        DataTypeError: If the string contains a NUL byte, which Redshift
+            cannot store in a text column.
+
+    See Also:
+        https://docs.aws.amazon.com/redshift/latest/dg/r_QUOTE_LITERAL.html
+    """
+    if "\x00" in value:
+        raise DataTypeError(
+            "String contains a NUL byte (\\x00), which Redshift cannot store "
+            "in a text column. Strip or replace it before loading, e.g. "
+            "df[col] = df[col].str.replace('\\x00', '', regex=False)",
+            value=value[:50],
+        )
+
+    escaped = value.replace("\\", "\\\\").replace("'", "''")
+    return f"'{escaped}'"
+
+
 def python_to_sql_value(value: Any, redshift_type: RedshiftType) -> str:
     """
-    Convert a Python value to SQL literal string.
+    Convert a Python value to a SQL literal string.
 
     Args:
         value: The Python value to convert.
@@ -335,11 +461,12 @@ def python_to_sql_value(value: Any, redshift_type: RedshiftType) -> str:
 
     Returns:
         SQL literal string representation.
-    """
-    if value is None or (isinstance(value, float) and np.isnan(value)):
-        return "NULL"
 
-    if pd.isna(value):
+    Raises:
+        DataTypeError: If the value cannot be safely rendered as a literal
+            of the requested type.
+    """
+    if _is_null(value):
         return "NULL"
 
     if redshift_type == RedshiftType.BOOLEAN:
@@ -350,42 +477,70 @@ def python_to_sql_value(value: Any, redshift_type: RedshiftType) -> str:
         RedshiftType.INTEGER,
         RedshiftType.BIGINT,
     ):
-        return str(int(value))
+        try:
+            return str(int(value))
+        except (TypeError, ValueError) as exc:
+            raise DataTypeError(
+                f"Cannot convert value to an integer literal: {exc}",
+                dtype=redshift_type.value,
+                value=value,
+            ) from exc
 
     if redshift_type in (
         RedshiftType.REAL,
         RedshiftType.DOUBLE_PRECISION,
         RedshiftType.DECIMAL,
     ):
-        if np.isinf(value):
-            return "'Infinity'" if value > 0 else "'-Infinity'"
-        return str(value)
+        try:
+            float_val = float(value)
+        except (TypeError, ValueError) as exc:
+            raise DataTypeError(
+                f"Cannot convert value to a numeric literal: {exc}",
+                dtype=redshift_type.value,
+                value=value,
+            ) from exc
+
+        if np.isinf(float_val):
+            return "'Infinity'::FLOAT8" if float_val > 0 else "'-Infinity'::FLOAT8"
+        if np.isnan(float_val):
+            return "NULL"
+        # repr() round-trips floats exactly; str() is lossy on some values.
+        return repr(float_val)
 
     if redshift_type in (RedshiftType.TIMESTAMP, RedshiftType.TIMESTAMPTZ):
         if isinstance(value, pd.Timestamp):
             return f"'{value.isoformat()}'"
-        return f"'{value}'"
+        return escape_string_literal(str(value))
 
     if redshift_type == RedshiftType.DATE:
         if isinstance(value, pd.Timestamp):
             return f"'{value.date()}'"
-        return f"'{value}'"
+        return escape_string_literal(str(value))
 
     if redshift_type == RedshiftType.SUPER:
         import json
 
-        json_str = json.dumps(value)
-        escaped = json_str.replace("'", "''")
-        return f"JSON_PARSE('{escaped}')"
+        try:
+            json_str = json.dumps(value, default=str)
+        except (TypeError, ValueError) as exc:
+            raise DataTypeError(
+                f"Cannot serialize value to JSON for a SUPER column: {exc}",
+                dtype=redshift_type.value,
+                value=value,
+            ) from exc
+        return f"JSON_PARSE({escape_string_literal(json_str)})"
 
     if redshift_type == RedshiftType.VARBYTE:
         if isinstance(value, bytes):
             return f"'{value.hex()}'::VARBYTE"
-        return f"'{value}'::VARBYTE"
+        if isinstance(value, str):
+            return f"'{value.encode('utf-8').hex()}'::VARBYTE"
+        raise DataTypeError(
+            "VARBYTE columns require bytes or str values, got "
+            f"{type(value).__name__}",
+            dtype=redshift_type.value,
+            value=value,
+        )
 
-    # String types - escape single quotes
-    str_val = str(value)
-    escaped = str_val.replace("'", "''")
-    # Also escape backslashes for Redshift
-    escaped = escaped.replace("\\", "\\\\")
-    return f"'{escaped}'"
+    # String types.
+    return escape_string_literal(str(value))

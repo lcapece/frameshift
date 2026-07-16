@@ -10,6 +10,7 @@ from frameshift.types import (
     infer_redshift_type,
     python_to_sql_value,
 )
+from frameshift.exceptions import ValidationError
 
 
 class TestColumnSpec:
@@ -52,7 +53,19 @@ class TestColumnSpec:
             encode="zstd",
         )
         sql = spec.to_sql()
-        assert "ENCODE zstd" in sql
+        # Encodings are normalized to upper case and validated against
+        # Redshift's documented set.
+        assert "ENCODE ZSTD" in sql
+
+    def test_unknown_encoding_rejected(self):
+        spec = ColumnSpec(
+            name="data",
+            redshift_type=RedshiftType.VARCHAR,
+            length=1000,
+            encode="raw; DROP TABLE users",
+        )
+        with pytest.raises(ValidationError):
+            spec.to_sql()
 
 
 class TestInferRedshiftType:
@@ -129,17 +142,30 @@ class TestPythonToSqlValue:
 
     def test_float_values(self):
         assert python_to_sql_value(3.14, RedshiftType.DOUBLE_PRECISION) == "3.14"
-        assert python_to_sql_value(float("inf"), RedshiftType.DOUBLE_PRECISION) == "'Infinity'"
-        assert python_to_sql_value(float("-inf"), RedshiftType.DOUBLE_PRECISION) == "'-Infinity'"
+        # Infinity carries an explicit cast so Redshift does not have to
+        # infer the type of a bare quoted literal.
+        assert (
+            python_to_sql_value(float("inf"), RedshiftType.DOUBLE_PRECISION)
+            == "'Infinity'::FLOAT8"
+        )
+        assert (
+            python_to_sql_value(float("-inf"), RedshiftType.DOUBLE_PRECISION)
+            == "'-Infinity'::FLOAT8"
+        )
+
+    def test_nan_becomes_null(self):
+        assert python_to_sql_value(float("nan"), RedshiftType.DOUBLE_PRECISION) == "NULL"
 
     def test_string_escaping(self):
-        # Single quotes
-        result = python_to_sql_value("it's", RedshiftType.VARCHAR)
-        assert result == "'it''s'"
-
-        # Backslashes
-        result = python_to_sql_value("path\\to\\file", RedshiftType.VARCHAR)
-        assert "\\\\" in result
+        # Escaping matches Redshift's QUOTE_LITERAL: both single quotes and
+        # backslashes are doubled inside a plain literal. See
+        # tests/test_injection.py for the security properties.
+        assert python_to_sql_value("it's", RedshiftType.VARCHAR) == "'it''s'"
+        assert (
+            python_to_sql_value("path\\to\\file", RedshiftType.VARCHAR)
+            == "'path\\\\to\\\\file'"
+        )
+        assert python_to_sql_value("plain", RedshiftType.VARCHAR) == "'plain'"
 
     def test_timestamp_values(self):
         ts = pd.Timestamp("2024-01-15 10:30:00")

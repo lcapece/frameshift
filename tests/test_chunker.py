@@ -180,7 +180,7 @@ class TestSQLGenerator:
         })
         sql = generator.generate_insert_statement(df)
 
-        assert "O''Brien" in sql  # Escaped quote
+        assert "'O''Brien'" in sql  # Doubled quote, per QUOTE_LITERAL
 
     def test_null_values(self, generator):
         df = pd.DataFrame({

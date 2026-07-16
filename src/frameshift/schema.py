@@ -11,6 +11,7 @@ from typing import Any
 import pandas as pd
 
 from frameshift.types import ColumnSpec, RedshiftType, infer_redshift_type
+from frameshift.identifiers import quote_identifier, quote_qualified_name
 from frameshift.exceptions import ValidationError
 
 
@@ -65,13 +66,24 @@ class TableSchema:
                 expected="COMPOUND or INTERLEAVED",
                 received=self.sortkey_type,
             )
+        if self.backup not in ("YES", "NO"):
+            raise ValidationError(
+                f"Invalid backup value: {self.backup}",
+                field="backup",
+                expected="YES or NO",
+                received=str(self.backup),
+            )
 
     @property
     def full_table_name(self) -> str:
-        """Get fully qualified table name."""
-        if self.schema_name:
-            return f'"{self.schema_name}"."{self.table_name}"'
-        return f'"{self.table_name}"'
+        """
+        Get the fully qualified, quoted table name.
+
+        Raises:
+            ValidationError: If the table or schema name is not a safe
+                identifier.
+        """
+        return quote_qualified_name(self.table_name, self.schema_name)
 
     def to_create_table_sql(self) -> str:
         """
@@ -97,12 +109,16 @@ class TableSchema:
 
         # Primary key constraint
         if self.primary_key:
-            pk_cols = ", ".join(f'"{c}"' for c in self.primary_key)
+            pk_cols = ", ".join(
+                quote_identifier(c, kind="column") for c in self.primary_key
+            )
             col_defs.append(f"PRIMARY KEY ({pk_cols})")
 
         # Unique constraints
         for unique_cols in self.unique_keys:
-            uk_cols = ", ".join(f'"{c}"' for c in unique_cols)
+            uk_cols = ", ".join(
+                quote_identifier(c, kind="column") for c in unique_cols
+            )
             col_defs.append(f"UNIQUE ({uk_cols})")
 
         parts.append(f"(\n  {',\n  '.join(col_defs)}\n)")
@@ -116,13 +132,16 @@ class TableSchema:
 
         # Distribution style/key
         if self.distkey:
-            table_props.append(f'DISTSTYLE KEY DISTKEY ("{self.distkey}")')
+            quoted_distkey = quote_identifier(self.distkey, kind="column")
+            table_props.append(f"DISTSTYLE KEY DISTKEY ({quoted_distkey})")
         elif self.diststyle != "AUTO":
             table_props.append(f"DISTSTYLE {self.diststyle}")
 
         # Sort key
         if self.sortkey:
-            sk_cols = ", ".join(f'"{c}"' for c in self.sortkey)
+            sk_cols = ", ".join(
+                quote_identifier(c, kind="column") for c in self.sortkey
+            )
             if self.sortkey_type == "INTERLEAVED":
                 table_props.append(f"INTERLEAVED SORTKEY ({sk_cols})")
             else:
@@ -144,7 +163,9 @@ class TableSchema:
             INSERT INTO table (columns) VALUES prefix.
         """
         if include_columns:
-            col_names = ", ".join(f'"{col.name}"' for col in self.columns)
+            col_names = ", ".join(
+                quote_identifier(col.name, kind="column") for col in self.columns
+            )
             return f"INSERT INTO {self.full_table_name} ({col_names}) VALUES"
         return f"INSERT INTO {self.full_table_name} VALUES"
 

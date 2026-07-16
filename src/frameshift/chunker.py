@@ -11,8 +11,9 @@ from typing import Iterator, Any
 import pandas as pd
 import numpy as np
 
-from frameshift.config import FrameShiftConfig, MAX_STATEMENT_SIZE_BYTES
+from frameshift.config import MAX_STATEMENT_SIZE_BYTES
 from frameshift.types import ColumnSpec, python_to_sql_value
+from frameshift.identifiers import quote_identifier, quote_qualified_name
 from frameshift.exceptions import ChunkingError
 
 
@@ -338,15 +339,27 @@ class SQLGenerator:
 
     @property
     def full_table_name(self) -> str:
-        """Get fully qualified table name."""
-        if self.schema_name:
-            return f'"{self.schema_name}"."{self.table_name}"'
-        return f'"{self.table_name}"'
+        """
+        Get the fully qualified, quoted table name.
+
+        Raises:
+            ValidationError: If the table or schema name is not a safe
+                identifier.
+        """
+        return quote_qualified_name(self.table_name, self.schema_name)
 
     def generate_insert_prefix(self, include_columns: bool = True) -> str:
-        """Generate the INSERT INTO ... VALUES prefix."""
+        """
+        Generate the ``INSERT INTO ... VALUES`` prefix.
+
+        Raises:
+            ValidationError: If any identifier is unsafe.
+        """
         if include_columns and self.column_specs:
-            col_names = ", ".join(f'"{col.name}"' for col in self.column_specs)
+            col_names = ", ".join(
+                quote_identifier(col.name, kind="column")
+                for col in self.column_specs
+            )
             return f"INSERT INTO {self.full_table_name} ({col_names}) VALUES\n"
         return f"INSERT INTO {self.full_table_name} VALUES\n"
 
