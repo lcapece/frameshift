@@ -82,17 +82,32 @@ the server's response, which may contain a value from the offending row.
 ### What the tests do and do not prove
 
 `tests/test_injection.py` parses generated SQL with a model of Redshift's
-lexer. That model is written from AWS's documentation, and it is checked
-against both interpretations of a backslash precisely so that a wrong
-assumption about the server shows up as a failure rather than as a silent
-hole. But it is still a model. The escaping is not exercised against a live
-Redshift cluster in CI.
+lexer, written from AWS's documentation and checked against both
+interpretations of a backslash so that a wrong assumption shows up as a
+failure rather than a silent hole.
 
-The same caveat applies more strongly to transaction handling. The
-savepoint, rollback, and `commit_every` behavior is tested against a fake
-connection that records statements -- not against psycopg2 or
-redshift-connector talking to a real server. The failure paths in
-particular are the least verified part of the library.
+That model has been checked against a real cluster. Every payload in
+`BREAKOUT_SEQUENCES` -- backslash-quote combinations, quote breakouts, union
+attempts, unicode, embedded newlines -- was rendered by
+`python_to_sql_value` and executed against Redshift Serverless
+(`PostgreSQL 8.0.2 / Redshift 1.0.300094`). All of them round-tripped
+byte-for-byte as data, and a table named as the drop target of the payloads
+was still standing afterwards.
+
+That run also settled the question the escaping turns on. Redshift has no
+`standard_conforming_strings` parameter (`SHOW` errors with "unrecognized
+configuration parameter"), and `select 'a\b'` returns a two-character string
+whose second character is a backspace -- so a backslash in an ordinary
+literal *is* an escape character, and doubling it is required. This is why
+the escaping must not be "modernized" to current PostgreSQL semantics.
+
+**Not yet verified against a live cluster:** the transaction machinery.
+Savepoints, rollback, and `commit_every` are tested against a fake
+connection that records statements, not against psycopg2 or
+redshift-connector driving a real server. The live testing was done through
+the Redshift Data API, which does not exercise that code path. Server-side
+rejection of bad data has been confirmed to leave the table clean, but
+Frameshift's own rollback handling has not.
 
 If you run Frameshift against a real cluster and see it behave differently
 from what is described here, that is a bug worth reporting, and the report

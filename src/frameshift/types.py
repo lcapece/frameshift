@@ -453,6 +453,13 @@ def escape_string_literal(value: str) -> str:
     breakout described above. The property is covered from both server
     modes in ``tests/test_injection.py``.
 
+    Verified against Redshift Serverless (PostgreSQL 8.0.2 / Redshift
+    1.0.300094): ``select 'a\\b'`` returns a two-character string ending in
+    a backspace, so ``\\b`` was consumed as a C-style escape. Redshift also
+    has no ``standard_conforming_strings`` parameter -- ``SHOW`` reports it
+    as an unrecognized configuration parameter -- so there is no server
+    setting that changes this and none should be set.
+
     Args:
         value: The raw string to render.
 
