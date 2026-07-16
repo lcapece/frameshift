@@ -15,8 +15,8 @@ fix before public disclosure.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.3.x   | Yes       |
-| < 0.3   | No        |
+| 1.1.x   | Yes       |
+| < 1.1   | No        |
 
 ## The security model, and why it matters here
 
@@ -110,7 +110,7 @@ is genuinely useful.
 
 ## Version history of security-relevant changes
 
-### 0.3.0
+### 1.1.0
 
 Hardening release. Several issues in 0.2.0 were fixed:
 

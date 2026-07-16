@@ -7,16 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-07-16
+## [1.1.0] - 2026-07-16
 
 A hardening and correctness release. **Upgrading is recommended for all
 users**: 0.2.0 and earlier could be induced to execute attacker-supplied
 SQL through a DataFrame's column names, and silently corrupted several
 kinds of data.
 
-This is a minor version rather than a patch because the changes below break
-existing installs, even though most of them are bug fixes. Read "Breaking
-changes" before upgrading.
+The changes below break existing installs, even though most of them are bug
+fixes. Read "Breaking changes" before upgrading.
 
 ### Breaking changes
 
@@ -168,7 +167,7 @@ See [SECURITY.md](SECURITY.md) for the full model.
   - Distribution analysis
   - Unique key validation
 
-[Unreleased]: https://github.com/lcapece/frameshift/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/lcapece/frameshift/compare/v0.2.0...v0.3.0
+[Unreleased]: https://github.com/lcapece/frameshift/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/lcapece/frameshift/compare/v0.2.0...v1.1.0
 [0.2.0]: https://github.com/lcapece/frameshift/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/lcapece/frameshift/releases/tag/v0.1.0
