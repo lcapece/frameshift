@@ -29,11 +29,11 @@ jobs:
 
       - name: Run linting with Ruff
         run: |
-          ruff check src tests
+          ruff check src tests examples
 
       - name: Check formatting with Black
         run: |
-          black --check src tests
+          black --check src tests examples
 
       - name: Run type checking with MyPy
         run: |
@@ -42,6 +42,17 @@ jobs:
       - name: Run tests with pytest
         run: |
           pytest --cov=frameshift --cov-report=xml --cov-report=term-missing
+
+      # The examples are documentation, and documentation that does not run
+      # is documentation that is wrong. Each is written to work without a
+      # cluster, so CI can execute them.
+      - name: Run examples
+        run: |
+          for example in examples/*.py; do
+            case "$example" in */__init__.py) continue;; esac
+            echo "--- $example"
+            python "$example" > /dev/null
+          done
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

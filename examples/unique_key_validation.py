@@ -8,27 +8,61 @@ This example demonstrates how to:
 - Handle validation failures gracefully
 """
 
-import pandas as pd
 import numpy as np
-from frameshift import FrameShift, UniqueKeyValidator
+import pandas as pd
+
+from frameshift import FrameShift, FrameShiftConfig, UniqueKeyValidator
 
 
 def main():
     # Create sample data with some duplicates
     np.random.seed(42)
 
-    df = pd.DataFrame({
-        'order_id': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-        'customer_id': [101, 102, 101, 103, 102, 104, 101, 105, 103, 106],
-        'order_date': pd.to_datetime([
-            '2024-01-01', '2024-01-01', '2024-01-02', '2024-01-02',
-            '2024-01-02', '2024-01-03', '2024-01-03', '2024-01-03',
-            '2024-01-04', '2024-01-04'
-        ]),
-        'product_id': ['P001', 'P002', 'P001', 'P003', 'P002', 'P001', 'P002', 'P003', 'P001', 'P002'],
-        'quantity': [1, 2, 1, 3, 1, 2, 1, 1, 2, 1],
-        'total': [99.99, 149.99, 99.99, 299.99, 149.99, 199.99, 99.99, 79.99, 199.99, 149.99],
-    })
+    df = pd.DataFrame(
+        {
+            "order_id": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            "customer_id": [101, 102, 101, 103, 102, 104, 101, 105, 103, 106],
+            "order_date": pd.to_datetime(
+                [
+                    "2024-01-01",
+                    "2024-01-01",
+                    "2024-01-02",
+                    "2024-01-02",
+                    "2024-01-02",
+                    "2024-01-03",
+                    "2024-01-03",
+                    "2024-01-03",
+                    "2024-01-04",
+                    "2024-01-04",
+                ]
+            ),
+            "product_id": [
+                "P001",
+                "P002",
+                "P001",
+                "P003",
+                "P002",
+                "P001",
+                "P002",
+                "P003",
+                "P001",
+                "P002",
+            ],
+            "quantity": [1, 2, 1, 3, 1, 2, 1, 1, 2, 1],
+            "total": [
+                99.99,
+                149.99,
+                99.99,
+                299.99,
+                149.99,
+                199.99,
+                99.99,
+                79.99,
+                199.99,
+                149.99,
+            ],
+        }
+    )
 
     print("Sample Order Data:")
     print(df)
@@ -41,7 +75,7 @@ def main():
     print("TEST 1: Single Unique Column (order_id)")
     print("=" * 60)
 
-    result = validator.validate(df, 'order_id')
+    result = validator.validate(df, "order_id")
     print(result.summary())
 
     # Test 2: Single column that is NOT unique
@@ -49,7 +83,7 @@ def main():
     print("TEST 2: Non-Unique Column (customer_id)")
     print("=" * 60)
 
-    result = validator.validate(df, 'customer_id')
+    result = validator.validate(df, "customer_id")
     print(result.summary())
 
     if result.sample_duplicates is not None:
@@ -61,7 +95,7 @@ def main():
     print("TEST 3: Composite Key (customer_id + order_date + product_id)")
     print("=" * 60)
 
-    result = validator.validate(df, ['customer_id', 'order_date', 'product_id'])
+    result = validator.validate(df, ["customer_id", "order_date", "product_id"])
     print(result.summary())
 
     # Test 4: Composite key that is NOT unique
@@ -70,19 +104,24 @@ def main():
     print("=" * 60)
 
     # Add a duplicate row for this test
-    df_with_dups = pd.concat([
-        df,
-        pd.DataFrame({
-            'order_id': [11],
-            'customer_id': [101],
-            'order_date': pd.to_datetime(['2024-01-05']),
-            'product_id': ['P001'],  # Same customer + product as row 0 and 2
-            'quantity': [1],
-            'total': [99.99],
-        })
-    ], ignore_index=True)
+    df_with_dups = pd.concat(
+        [
+            df,
+            pd.DataFrame(
+                {
+                    "order_id": [11],
+                    "customer_id": [101],
+                    "order_date": pd.to_datetime(["2024-01-05"]),
+                    "product_id": ["P001"],  # Same customer + product as row 0 and 2
+                    "quantity": [1],
+                    "total": [99.99],
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
 
-    result = validator.validate(df_with_dups, ['customer_id', 'product_id'])
+    result = validator.validate(df_with_dups, ["customer_id", "product_id"])
     print(result.summary())
 
     # Test 5: Find natural keys
@@ -105,13 +144,19 @@ def main():
     print("USING FRAMESHIFT")
     print("=" * 60)
 
-    from unittest.mock import MagicMock
-    mock_conn = MagicMock()
-    fs = FrameShift(connection=mock_conn)
+    # dry_run renders SQL without opening a connection, so this example
+    # runs anywhere. The connection parameters are unused.
+    fs = FrameShift(
+        host="unused-in-dry-run",
+        database="unused",
+        user="unused",
+        password="unused",
+        config=FrameShiftConfig(dry_run=True),
+    )
 
     # Validate before load
     print("\nValidating unique key before load...")
-    validation = fs.validate_unique_key(df, 'order_id')
+    validation = fs.validate_unique_key(df, "order_id")
     print(f"Is unique: {validation.is_unique}")
     print(f"Unique combinations: {validation.unique_combinations}")
 
@@ -141,30 +186,38 @@ def main():
             # Option 1: Deduplicate
             print("\nOption 1: Deduplicate (keep first)")
             if isinstance(unique_key, list):
-                df_deduped = df.drop_duplicates(subset=unique_key, keep='first')
+                df_deduped = df.drop_duplicates(subset=unique_key, keep="first")
             else:
-                df_deduped = df.drop_duplicates(subset=[unique_key], keep='first')
+                df_deduped = df.drop_duplicates(subset=[unique_key], keep="first")
             print(f"Rows after dedup: {len(df_deduped)}")
 
             # Option 2: Fail
             print("\nOption 2: Abort load")
             return None
 
-        print(f"Validation passed! All {validation.unique_combinations} keys are unique.")
+        print(
+            f"Validation passed! All {validation.unique_combinations} keys are unique."
+        )
         print("Proceeding with load...")
 
-        # In real usage, this would actually load
-        # result = fs.load(df, table_name, unique_key=unique_key)
-        return "Success"
+        # This FrameShift is configured with dry_run=True, so the load
+        # renders SQL rather than executing it. Point it at a real cluster
+        # and the same call loads.
+        result = fs.load(df, table_name, unique_key=unique_key)
+        print(
+            f"Would issue {result.chunks_processed} INSERT statement(s) "
+            f"for {result.rows_loaded} rows."
+        )
+        return result
 
     # Test with unique data
     print("\n--- Testing with unique data ---")
-    safe_load(fs, df, 'orders', 'order_id')
+    safe_load(fs, df, "orders", "order_id")
 
     # Test with duplicate data
     print("\n--- Testing with duplicate data ---")
-    safe_load(fs, df_with_dups, 'orders', ['customer_id', 'product_id'])
+    safe_load(fs, df_with_dups, "orders", ["customer_id", "product_id"])
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
