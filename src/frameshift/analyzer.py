@@ -219,18 +219,20 @@ class DistributionAnalyzer:
         avg_rows = np.mean(counts) if counts else 0
         std_rows = np.std(counts) if counts else 0
 
-        # Skew ratio: how much bigger is max vs average?
-        skew_ratio = max_rows / avg_rows if avg_rows > 0 else float("inf")
+        # Skew ratio: how much bigger is max vs average? Coerced to a plain
+        # float because numpy reductions return numpy scalars, which are not
+        # the float this is annotated and consumed as.
+        skew_ratio = float(max_rows / avg_rows) if avg_rows > 0 else float("inf")
 
         # Coefficient of variation
-        cv = std_rows / avg_rows if avg_rows > 0 else float("inf")
+        cv = float(std_rows / avg_rows) if avg_rows > 0 else float("inf")
 
         # Generate recommendation
         recommendation = self._generate_recommendation(
             column=column,
-            cardinality_ratio=cardinality_ratio,
+            cardinality_ratio=float(cardinality_ratio),
             skew_ratio=skew_ratio,
-            null_ratio=null_count / row_count if row_count > 0 else 0,
+            null_ratio=float(null_count / row_count) if row_count > 0 else 0.0,
         )
 
         return DistributionAnalysis(
@@ -401,10 +403,10 @@ class DistributionAnalyzer:
 
         comparison_df = pd.DataFrame(results)
         # Sort by skew ratio (lower is better)
-        comparison_df = comparison_df.sort_values(
+        sorted_df: pd.DataFrame = comparison_df.sort_values(
             "skew_ratio", ascending=True, na_position="last"
         )
-        return comparison_df
+        return sorted_df
 
 
 @dataclass

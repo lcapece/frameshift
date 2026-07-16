@@ -187,7 +187,11 @@ ignore = [
 known-first-party = ["frameshift"]
 
 [tool.mypy]
-python_version = "3.10"
+# python_version is deliberately unset. Pinning it to the 3.10 floor makes
+# mypy parse the *installed* numpy stubs under 3.10 rules, and recent numpy
+# stubs use 3.12 syntax -- so the check fails on the very interpreters the
+# CI matrix is meant to cover. Unset, mypy uses the running interpreter,
+# which is exactly the version under test.
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
