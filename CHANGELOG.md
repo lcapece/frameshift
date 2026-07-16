@@ -7,12 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.1] - 2026-07-16
+## [0.3.0] - 2026-07-16
 
 A hardening and correctness release. **Upgrading is recommended for all
 users**: 0.2.0 and earlier could be induced to execute attacker-supplied
 SQL through a DataFrame's column names, and silently corrupted several
 kinds of data.
+
+This is a minor version rather than a patch because the changes below break
+existing installs, even though most of them are bug fixes. Read "Breaking
+changes" before upgrading.
+
+### Breaking changes
+
+- **`psycopg2` is no longer installed by default.** `pip install frameshift`
+  previously pulled in `psycopg2-binary`, so `FrameShift(host=...)` worked
+  out of the box; it now raises `RedshiftConnectionError` until a driver is
+  present. Install `frameshift[psycopg2]` to restore the previous behavior,
+  or pass your own connection.
+
+  The default was wrong for this library: it forced a driver on everyone
+  using redshift-connector, SQLAlchemy, or an existing connection, and in
+  the locked-down environments Frameshift exists for, the driver is rarely
+  the caller's choice.
+- **Python 3.10 or later is required.** 0.2.0 declared 3.9 support but used
+  3.10-only syntax and could not import there, so this breaks no working
+  install.
+- **Object columns now infer as `SUPER` or `VARBYTE`** where they
+  previously became `VARCHAR`. This is a bug fix -- the inspection code
+  existed but was unreachable -- but it changes the DDL generated for dict,
+  list, and bytes columns. If you depend on the old behavior, pass an
+  explicit `column_spec`.
+- **Columns of `1`/`0` integers no longer infer as `BOOLEAN`.**
+- **`batch_size` is now a hard cap** on rows per INSERT. It was previously
+  advisory, so loads may issue more, smaller statements than before.
 
 ### Security
 
@@ -44,13 +72,9 @@ See [SECURITY.md](SECURITY.md) for the full model.
   consulted first -- so every dict, list, and bytes column silently loaded
   as text instead of `SUPER` or `VARBYTE`. Loading a `SUPER` column also
   raised `ValueError`, because `pd.isna()` does not return a scalar for
-  list-like input.
+  list-like input. See "Breaking changes": this alters generated DDL.
 - **String booleans loaded inverted.** Rendering tested `if value`, and
   every non-empty string is truthy, so `"false"` became `TRUE`.
-- **Integer flags no longer infer as `BOOLEAN`.** The check compared
-  against a set containing both `True` and `1`, which collapse to one
-  element in Python. A `1`/`0` column is more often a count or an enum, and
-  the coercion is irreversible.
 - **`VARCHAR` lengths are measured in UTF-8 bytes**, which is what Redshift
   limits. Measuring characters undersized any column holding non-ASCII text,
   so inference produced a column the data did not fit in.
@@ -62,8 +86,6 @@ See [SECURITY.md](SECURITY.md) for the full model.
   transaction, so the first bad chunk used to make every subsequent chunk
   fail: N errors for one root cause, nothing loaded. Chunks now run inside
   savepoints when failures are tolerated.
-- **`batch_size` is a hard cap.** It was used only to derive a loose
-  ceiling, so `batch_size=10` could still emit one 100-row statement.
 - **`dry_run` no longer touches the connection**, and reports
   `created_table` correctly.
 - **`generate_sql()` no longer mutates shared config.** It swapped
@@ -81,17 +103,15 @@ See [SECURITY.md](SECURITY.md) for the full model.
 
 ### Changed
 
-- **`psycopg2-binary` is no longer a required dependency.** It defeated the
-  purpose for anyone using redshift-connector, SQLAlchemy, or their own
-  connection -- and in the locked-down environments this library exists for,
-  the driver is rarely the caller's choice. Install
-  `frameshift[psycopg2]` for the previous behavior.
-- **Python 3.10+ is now required.** 0.2.0 declared 3.9 support but used
-  3.10-only syntax, so it could not import there. CI tested 3.9 and could
-  not have passed.
 - Rewrote the README around the actual use case, with explicit guidance on
-  where INSERT-based loading stops being reasonable.
+  where INSERT-based loading stops being reasonable, and an honest
+  comparison against `COPY`, `awswrangler`, and `pandas.to_sql`.
 - Added `SECURITY.md`.
+- Examples run without a database and are executed in CI. Most previously
+  constructed a `MagicMock` and called it a demonstration.
+- CI tests Python 3.10-3.13. It previously tested 3.9, which cannot run
+  this package, and could not have been passing: `mypy` reported 23 errors
+  and `black` wanted to reformat 15 files.
 
 ## [0.2.0] - 2026-05-07
 
@@ -148,7 +168,7 @@ See [SECURITY.md](SECURITY.md) for the full model.
   - Distribution analysis
   - Unique key validation
 
-[Unreleased]: https://github.com/lcapece/frameshift/compare/v0.2.1...HEAD
-[0.2.1]: https://github.com/lcapece/frameshift/compare/v0.2.0...v0.2.1
+[Unreleased]: https://github.com/lcapece/frameshift/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/lcapece/frameshift/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/lcapece/frameshift/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/lcapece/frameshift/releases/tag/v0.1.0

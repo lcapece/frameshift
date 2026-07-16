@@ -15,8 +15,8 @@ fix before public disclosure.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.2.x   | Yes       |
-| < 0.2   | No        |
+| 0.3.x   | Yes       |
+| < 0.3   | No        |
 
 ## The security model, and why it matters here
 
@@ -79,6 +79,25 @@ size, which defaults to 15 MB.
 **Errors may quote your data.** A failed chunk's error message can include
 the server's response, which may contain a value from the offending row.
 
+### What the tests do and do not prove
+
+`tests/test_injection.py` parses generated SQL with a model of Redshift's
+lexer. That model is written from AWS's documentation, and it is checked
+against both interpretations of a backslash precisely so that a wrong
+assumption about the server shows up as a failure rather than as a silent
+hole. But it is still a model. The escaping is not exercised against a live
+Redshift cluster in CI.
+
+The same caveat applies more strongly to transaction handling. The
+savepoint, rollback, and `commit_every` behavior is tested against a fake
+connection that records statements -- not against psycopg2 or
+redshift-connector talking to a real server. The failure paths in
+particular are the least verified part of the library.
+
+If you run Frameshift against a real cluster and see it behave differently
+from what is described here, that is a bug worth reporting, and the report
+is genuinely useful.
+
 ### If you are hardening a deployment
 
 - Grant the Redshift user only what it needs. Frameshift issues
@@ -91,7 +110,7 @@ the server's response, which may contain a value from the offending row.
 
 ## Version history of security-relevant changes
 
-### 0.2.1
+### 0.3.0
 
 Hardening release. Several issues in 0.2.0 were fixed:
 
