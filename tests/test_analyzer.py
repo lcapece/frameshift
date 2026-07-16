@@ -5,9 +5,7 @@ import pytest
 
 from frameshift.analyzer import (
     DistributionAnalyzer,
-    DistributionAnalysis,
     UniqueKeyValidator,
-    UniqueKeyValidation,
 )
 from frameshift.exceptions import ValidationError
 
@@ -21,11 +19,13 @@ class TestDistributionAnalyzer:
 
     @pytest.fixture
     def sample_df(self):
-        return pd.DataFrame({
-            "id": range(1000),
-            "category": ["A", "B", "C", "D"] * 250,
-            "value": [1] * 1000,  # All same value - worst case
-        })
+        return pd.DataFrame(
+            {
+                "id": range(1000),
+                "category": ["A", "B", "C", "D"] * 250,
+                "value": [1] * 1000,  # All same value - worst case
+            }
+        )
 
     def test_high_cardinality_distribution(self, analyzer, sample_df):
         """High cardinality column should have good distribution."""
@@ -55,9 +55,7 @@ class TestDistributionAnalyzer:
 
     def test_null_handling(self, analyzer):
         """NULLs should be counted and reported."""
-        df = pd.DataFrame({
-            "col": [1, 2, None, None, 5]
-        })
+        df = pd.DataFrame({"col": [1, 2, None, None, 5]})
         analysis = analyzer.analyze(df, "col")
 
         assert analysis.null_count == 2
@@ -70,9 +68,7 @@ class TestDistributionAnalyzer:
 
     def test_compare_columns(self, analyzer, sample_df):
         """Compare multiple columns as DISTKEY candidates."""
-        comparison = analyzer.compare_columns(
-            sample_df, ["id", "category", "value"]
-        )
+        comparison = analyzer.compare_columns(sample_df, ["id", "category", "value"])
 
         assert len(comparison) == 3
         assert "column" in comparison.columns
@@ -131,10 +127,12 @@ class TestUniqueKeyValidator:
 
     def test_unique_composite_key(self, validator):
         """Composite key that is unique."""
-        df = pd.DataFrame({
-            "user_id": [1, 1, 2, 2],
-            "date": ["2024-01-01", "2024-01-02", "2024-01-01", "2024-01-02"],
-        })
+        df = pd.DataFrame(
+            {
+                "user_id": [1, 1, 2, 2],
+                "date": ["2024-01-01", "2024-01-02", "2024-01-01", "2024-01-02"],
+            }
+        )
         result = validator.validate(df, ["user_id", "date"])
 
         assert result.is_unique
@@ -142,10 +140,12 @@ class TestUniqueKeyValidator:
 
     def test_duplicate_composite_key(self, validator):
         """Composite key with duplicates."""
-        df = pd.DataFrame({
-            "user_id": [1, 1, 1, 2],
-            "date": ["2024-01-01", "2024-01-01", "2024-01-02", "2024-01-01"],
-        })
+        df = pd.DataFrame(
+            {
+                "user_id": [1, 1, 1, 2],
+                "date": ["2024-01-01", "2024-01-01", "2024-01-02", "2024-01-01"],
+            }
+        )
         result = validator.validate(df, ["user_id", "date"])
 
         assert not result.is_unique
@@ -159,11 +159,13 @@ class TestUniqueKeyValidator:
 
     def test_find_natural_keys(self, validator):
         """Find potential natural keys."""
-        df = pd.DataFrame({
-            "id": [1, 2, 3, 4],  # Unique
-            "name": ["A", "B", "A", "B"],  # Not unique
-            "code": ["X1", "X2", "X3", "X4"],  # Unique
-        })
+        df = pd.DataFrame(
+            {
+                "id": [1, 2, 3, 4],  # Unique
+                "name": ["A", "B", "A", "B"],  # Not unique
+                "code": ["X1", "X2", "X3", "X4"],  # Unique
+            }
+        )
         keys = validator.find_natural_keys(df)
 
         assert len(keys) >= 1

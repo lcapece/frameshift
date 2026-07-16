@@ -7,8 +7,10 @@ SQLAlchemy, or user-provided connections).
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Iterator, Protocol, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
+from urllib.parse import quote_plus
 
 from frameshift.exceptions import RedshiftConnectionError
 
@@ -76,6 +78,16 @@ class ConnectionManager(ABC):
     @abstractmethod
     def release_connection(self, conn: DBConnection) -> None:
         """Release a connection back to the pool or close it."""
+        ...
+
+    @abstractmethod
+    def close(self) -> None:
+        """
+        Close any connection this manager owns.
+
+        Managers that wrap a caller-supplied connection should do nothing:
+        the caller owns its lifecycle.
+        """
         ...
 
     @contextmanager
@@ -146,17 +158,18 @@ class Psycopg2ConnectionManager(ConnectionManager):
 
             self._connection = psycopg2.connect(**self.connection_params)
             return self._connection
-        except ImportError:
+        except ImportError as exc:
             raise RedshiftConnectionError(
-                "psycopg2 is not installed. Install with: pip install psycopg2-binary",
+                "psycopg2 is not installed. Install it with: "
+                'pip install "frameshift[psycopg2]"',
                 host=self.connection_params.get("host"),
-            )
-        except Exception as e:
+            ) from exc
+        except Exception as exc:
             raise RedshiftConnectionError(
-                f"Failed to connect to Redshift: {e}",
+                f"Failed to connect to Redshift: {exc}",
                 host=self.connection_params.get("host"),
                 port=self.connection_params.get("port"),
-            )
+            ) from exc
 
     def release_connection(self, conn: DBConnection) -> None:
         """Keep connection open for reuse."""
@@ -217,18 +230,18 @@ class RedshiftConnectorManager(ConnectionManager):
 
             self._connection = redshift_connector.connect(**self.connection_params)
             return self._connection
-        except ImportError:
+        except ImportError as exc:
             raise RedshiftConnectionError(
-                "redshift-connector is not installed. "
-                "Install with: pip install redshift-connector",
+                "redshift-connector is not installed. Install it with: "
+                'pip install "frameshift[redshift-connector]"',
                 host=self.connection_params.get("host"),
-            )
-        except Exception as e:
+            ) from exc
+        except Exception as exc:
             raise RedshiftConnectionError(
-                f"Failed to connect to Redshift: {e}",
+                f"Failed to connect to Redshift: {exc}",
                 host=self.connection_params.get("host"),
                 port=self.connection_params.get("port"),
-            )
+            ) from exc
 
     def release_connection(self, conn: DBConnection) -> None:
         """Keep connection open for reuse."""
@@ -311,11 +324,11 @@ class SQLAlchemyConnectionManager(ConnectionManager):
                 from sqlalchemy import create_engine
 
                 self._engine = create_engine(connection_string, **kwargs)
-            except ImportError:
+            except ImportError as exc:
                 raise RedshiftConnectionError(
-                    "SQLAlchemy is not installed. "
-                    "Install with: pip install sqlalchemy sqlalchemy-redshift"
-                )
+                    "SQLAlchemy is not installed. Install it with: "
+                    'pip install "frameshift[sqlalchemy]"'
+                ) from exc
         else:
             raise RedshiftConnectionError(
                 "Either connection_string or engine must be provided"
@@ -327,7 +340,7 @@ class SQLAlchemyConnectionManager(ConnectionManager):
         """Get a connection from the engine."""
         if self._connection is None:
             self._connection = self._engine.connect()
-        return self._connection
+        return cast(DBConnection, self._connection)
 
     def release_connection(self, conn: DBConnection) -> None:
         """Keep connection open for reuse."""
@@ -374,13 +387,28 @@ def create_connection_manager(
 
     # SQLAlchemy connection string
     if connection_string is not None:
-        return SQLAlchemyConnectionManager(connection_string=connection_string, **kwargs)
+        return SQLAlchemyConnectionManager(
+            connection_string=connection_string, **kwargs
+        )
 
-    # Direct connection parameters
-    if not all([host, database, user, password]):
+    # Direct connection parameters. Checked individually rather than with
+    # all([...]) so that the error names what is missing, and so the types
+    # narrow to str for the constructors below.
+    missing = [
+        name
+        for name, value in (
+            ("host", host),
+            ("database", database),
+            ("user", user),
+            ("password", password),
+        )
+        if not value
+    ]
+    if missing or host is None or database is None or user is None or password is None:
         raise RedshiftConnectionError(
-            "Must provide either: (1) host, database, user, password, "
-            "(2) an existing connection, or (3) a SQLAlchemy connection_string"
+            f"Missing connection parameter(s): {', '.join(missing)}. Provide "
+            "either (1) host, database, user, and password, (2) an existing "
+            "connection, or (3) a SQLAlchemy connection_string."
         )
 
     if driver == "redshift-connector":
@@ -393,8 +421,12 @@ def create_connection_manager(
             **kwargs,
         )
     elif driver == "sqlalchemy":
+        # Credentials are percent-encoded: a password containing '@', '/',
+        # or ':' would otherwise be parsed as part of the URL's structure
+        # and silently produce a connection to the wrong place.
         conn_str = (
-            f"redshift+psycopg2://{user}:{password}@{host}:{port}/{database}"
+            f"redshift+psycopg2://{quote_plus(user)}:{quote_plus(password)}"
+            f"@{host}:{port}/{database}"
         )
         return SQLAlchemyConnectionManager(connection_string=conn_str, **kwargs)
     else:  # Default to psycopg2

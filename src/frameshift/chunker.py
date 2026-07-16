@@ -5,15 +5,17 @@ This module handles splitting DataFrames into chunks that fit within
 Redshift's 16 MB SQL statement size limit.
 """
 
+import math
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator, Any
+from typing import Any
 
 import pandas as pd
-import numpy as np
 
-from frameshift.config import FrameShiftConfig, MAX_STATEMENT_SIZE_BYTES
-from frameshift.types import ColumnSpec, python_to_sql_value
+from frameshift.config import MAX_STATEMENT_SIZE_BYTES
 from frameshift.exceptions import ChunkingError
+from frameshift.identifiers import quote_identifier, quote_qualified_name
+from frameshift.types import ColumnSpec, python_to_sql_value
 
 
 @dataclass
@@ -66,6 +68,7 @@ class DataFrameChunker:
     def __init__(
         self,
         max_bytes: int = MAX_STATEMENT_SIZE_BYTES - 1024 * 1024,
+        max_rows_per_chunk: int | None = None,
         initial_batch_size: int = 1000,
         sample_size: int = 100,
     ) -> None:
@@ -74,10 +77,14 @@ class DataFrameChunker:
 
         Args:
             max_bytes: Maximum bytes per INSERT statement.
+            max_rows_per_chunk: Hard cap on rows per INSERT. Chunks may be
+                smaller if ``max_bytes`` binds first, but never larger.
+                ``None`` means only the byte limit applies.
             initial_batch_size: Starting rows per chunk estimate.
             sample_size: Rows to sample for size estimation.
         """
         self.max_bytes = max_bytes
+        self.max_rows_per_chunk = max_rows_per_chunk
         self.initial_batch_size = initial_batch_size
         self.sample_size = sample_size
 
@@ -112,6 +119,7 @@ class DataFrameChunker:
 
         # Cap at reasonable maximum
         rows_per_chunk = min(estimated_rows_per_chunk, self.initial_batch_size * 10)
+        rows_per_chunk = self._apply_row_cap(rows_per_chunk)
 
         chunk_index = 0
         start_row = 0
@@ -170,11 +178,19 @@ class DataFrameChunker:
                     # Under-utilized, increase chunk size
                     rows_per_chunk = min(
                         int(rows_per_chunk * 1.5),
-                        total_rows - start_row,
+                        max(1, total_rows - start_row),
                     )
                 elif efficiency > 0.9:
                     # Near limit, be more conservative
                     rows_per_chunk = max(1, int(rows_per_chunk * 0.8))
+
+                rows_per_chunk = self._apply_row_cap(rows_per_chunk)
+
+    def _apply_row_cap(self, rows: int) -> int:
+        """Clamp a rows-per-chunk figure to ``max_rows_per_chunk``."""
+        if self.max_rows_per_chunk is None:
+            return max(1, rows)
+        return max(1, min(rows, self.max_rows_per_chunk))
 
     def _estimate_row_size(
         self,
@@ -297,8 +313,10 @@ class DataFrameChunker:
         avg_row_size = self._estimate_row_size(df, column_specs)
         available_bytes = self.max_bytes - insert_prefix_size - 100
 
-        estimated_rows_per_chunk = max(1, int(available_bytes / avg_row_size))
-        estimated_chunks = max(1, len(df) // estimated_rows_per_chunk + 1)
+        estimated_rows_per_chunk = self._apply_row_cap(
+            max(1, int(available_bytes / avg_row_size))
+        )
+        estimated_chunks = math.ceil(len(df) / estimated_rows_per_chunk)
 
         return {
             "total_rows": len(df),
@@ -338,15 +356,26 @@ class SQLGenerator:
 
     @property
     def full_table_name(self) -> str:
-        """Get fully qualified table name."""
-        if self.schema_name:
-            return f'"{self.schema_name}"."{self.table_name}"'
-        return f'"{self.table_name}"'
+        """
+        Get the fully qualified, quoted table name.
+
+        Raises:
+            ValidationError: If the table or schema name is not a safe
+                identifier.
+        """
+        return quote_qualified_name(self.table_name, self.schema_name)
 
     def generate_insert_prefix(self, include_columns: bool = True) -> str:
-        """Generate the INSERT INTO ... VALUES prefix."""
+        """
+        Generate the ``INSERT INTO ... VALUES`` prefix.
+
+        Raises:
+            ValidationError: If any identifier is unsafe.
+        """
         if include_columns and self.column_specs:
-            col_names = ", ".join(f'"{col.name}"' for col in self.column_specs)
+            col_names = ", ".join(
+                quote_identifier(col.name, kind="column") for col in self.column_specs
+            )
             return f"INSERT INTO {self.full_table_name} ({col_names}) VALUES\n"
         return f"INSERT INTO {self.full_table_name} VALUES\n"
 

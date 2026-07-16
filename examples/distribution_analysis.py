@@ -8,9 +8,10 @@ This example demonstrates how to:
 - Make informed DISTKEY decisions
 """
 
-import pandas as pd
 import numpy as np
-from frameshift import FrameShift, DistributionAnalyzer
+import pandas as pd
+
+from frameshift import DistributionAnalyzer, FrameShift
 
 
 def main():
@@ -18,29 +19,26 @@ def main():
     np.random.seed(42)
     n_rows = 10000
 
-    df = pd.DataFrame({
-        # High cardinality - good DISTKEY candidate
-        'user_id': range(1, n_rows + 1),
-
-        # Medium cardinality
-        'region': np.random.choice(['US', 'EU', 'APAC', 'LATAM'], n_rows),
-
-        # Low cardinality - poor DISTKEY candidate
-        'status': np.random.choice(['active', 'inactive'], n_rows, p=[0.8, 0.2]),
-
-        # Skewed distribution - problematic
-        'account_type': np.random.choice(
-            ['free', 'basic', 'premium', 'enterprise'],
-            n_rows,
-            p=[0.7, 0.2, 0.08, 0.02]  # Very skewed
-        ),
-
-        # With NULLs
-        'referrer_id': [
-            i if np.random.random() > 0.3 else None
-            for i in range(1, n_rows + 1)
-        ],
-    })
+    df = pd.DataFrame(
+        {
+            # High cardinality - good DISTKEY candidate
+            "user_id": range(1, n_rows + 1),
+            # Medium cardinality
+            "region": np.random.choice(["US", "EU", "APAC", "LATAM"], n_rows),
+            # Low cardinality - poor DISTKEY candidate
+            "status": np.random.choice(["active", "inactive"], n_rows, p=[0.8, 0.2]),
+            # Skewed distribution - problematic
+            "account_type": np.random.choice(
+                ["free", "basic", "premium", "enterprise"],
+                n_rows,
+                p=[0.7, 0.2, 0.08, 0.02],  # Very skewed
+            ),
+            # With NULLs
+            "referrer_id": [
+                i if np.random.random() > 0.3 else None for i in range(1, n_rows + 1)
+            ],
+        }
+    )
 
     print("Sample Data:")
     print(df.head(10))
@@ -50,7 +48,7 @@ def main():
     analyzer = DistributionAnalyzer(slice_count=16)
 
     # Analyze each column
-    columns_to_analyze = ['user_id', 'region', 'status', 'account_type', 'referrer_id']
+    columns_to_analyze = ["user_id", "region", "status", "account_type", "referrer_id"]
 
     print("\n" + "=" * 60)
     print("DISTRIBUTION ANALYSIS")
@@ -74,16 +72,19 @@ def main():
     print("USING FRAMESHIFT")
     print("=" * 60)
 
-    # Create FrameShift instance (connection not needed for analysis)
-    # Using a mock connection for demonstration
-    from unittest.mock import MagicMock
-    mock_conn = MagicMock()
-
-    fs = FrameShift(connection=mock_conn)
+    # Distribution analysis is entirely local -- it simulates Redshift's
+    # hashing in pandas and never queries the cluster -- so the connection
+    # parameters below are never used.
+    fs = FrameShift(
+        host="unused-for-analysis",
+        database="unused",
+        user="unused",
+        password="unused",
+    )
 
     # Analyze single column
     print("\nAnalyzing 'user_id':")
-    analysis = fs.analyze_distribution(df, 'user_id', slice_count=16)
+    analysis = fs.analyze_distribution(df, "user_id", slice_count=16)
     print(f"  Is good DISTKEY: {analysis.is_good_distkey()}")
     print(f"  Skew ratio: {analysis.skew_ratio:.2f}x")
     print(f"  Cardinality: {analysis.cardinality_ratio:.1%}")
@@ -91,7 +92,7 @@ def main():
     # Compare multiple
     print("\nComparing columns:")
     comparison = fs.compare_distkeys(df, columns_to_analyze)
-    best_column = comparison.iloc[0]['column']
+    best_column = comparison.iloc[0]["column"]
     print(f"  Best DISTKEY candidate: {best_column}")
 
     # Get full recommendations
@@ -99,14 +100,14 @@ def main():
     print("FULL RECOMMENDATIONS")
     print("=" * 60)
 
-    recs = fs.get_recommendations(df, 'user_events')
+    recs = fs.get_recommendations(df, "user_events")
     print(f"\nTable: {recs['table_name']}")
     print(f"Rows: {recs['row_count']:,}")
     print(f"Estimated size: {recs['estimated_size_mb']:.2f} MB")
-    print(f"\nDISTKEY recommendation:")
+    print("\nDISTKEY recommendation:")
     print(f"  Column: {recs['distkey']['column']}")
     print(f"  Reason: {recs['distkey']['reason']}")
-    print(f"\nSORTKEY recommendation:")
+    print("\nSORTKEY recommendation:")
     print(f"  Columns: {recs['sortkey']['columns']}")
     print(f"  Reason: {recs['sortkey']['reason']}")
 
@@ -140,5 +141,5 @@ def main():
     """)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

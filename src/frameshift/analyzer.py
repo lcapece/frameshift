@@ -7,13 +7,13 @@ to help optimize Redshift table design, particularly for DISTKEY selection.
 
 import hashlib
 from dataclasses import dataclass
+from itertools import combinations
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from frameshift.exceptions import ValidationError
-
 
 # Redshift uses 2-byte slot IDs, distributing across slices
 # Common slice counts based on node types
@@ -73,9 +73,7 @@ class DistributionAnalysis:
         # - Low null ratio
         null_ratio = self.null_count / self.row_count if self.row_count > 0 else 0
         return (
-            self.skew_ratio < 2.0
-            and self.cardinality_ratio > 0.01
-            and null_ratio < 0.1
+            self.skew_ratio < 2.0 and self.cardinality_ratio > 0.01 and null_ratio < 0.1
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -210,7 +208,7 @@ class DistributionAnalyzer:
 
         # Handle case where all values are NULL
         if not slice_distribution:
-            slice_distribution = {i: 0 for i in range(self.slice_count)}
+            slice_distribution = dict.fromkeys(range(self.slice_count), 0)
             # All NULLs go to slice 0 in Redshift
             slice_distribution[0] = null_count
 
@@ -221,19 +219,20 @@ class DistributionAnalyzer:
         avg_rows = np.mean(counts) if counts else 0
         std_rows = np.std(counts) if counts else 0
 
-        # Skew ratio: how much bigger is max vs average?
-        skew_ratio = max_rows / avg_rows if avg_rows > 0 else float("inf")
+        # Skew ratio: how much bigger is max vs average? Coerced to a plain
+        # float because numpy reductions return numpy scalars, which are not
+        # the float this is annotated and consumed as.
+        skew_ratio = float(max_rows / avg_rows) if avg_rows > 0 else float("inf")
 
         # Coefficient of variation
-        cv = std_rows / avg_rows if avg_rows > 0 else float("inf")
+        cv = float(std_rows / avg_rows) if avg_rows > 0 else float("inf")
 
         # Generate recommendation
         recommendation = self._generate_recommendation(
             column=column,
-            cardinality_ratio=cardinality_ratio,
+            cardinality_ratio=float(cardinality_ratio),
             skew_ratio=skew_ratio,
-            null_ratio=null_count / row_count if row_count > 0 else 0,
-            unique_values=unique_values,
+            null_ratio=float(null_count / row_count) if row_count > 0 else 0.0,
         )
 
         return DistributionAnalysis(
@@ -254,16 +253,14 @@ class DistributionAnalyzer:
             null_count=null_count,
         )
 
-    def _compute_slice_distribution(
-        self, series: pd.Series
-    ) -> dict[int, int]:
+    def _compute_slice_distribution(self, series: pd.Series) -> dict[int, int]:
         """
         Compute distribution of values across slices using MD5 hash.
 
         Redshift uses an internal hash function for distribution.
         MD5 provides similar uniform distribution characteristics.
         """
-        slice_counts: dict[int, int] = {i: 0 for i in range(self.slice_count)}
+        slice_counts: dict[int, int] = dict.fromkeys(range(self.slice_count), 0)
 
         # Hash each value and assign to slice
         for value in series:
@@ -300,7 +297,6 @@ class DistributionAnalyzer:
         cardinality_ratio: float,
         skew_ratio: float,
         null_ratio: float,
-        unique_values: int,
     ) -> str:
         """Generate actionable recommendation based on analysis."""
         issues = []
@@ -348,20 +344,14 @@ class DistributionAnalyzer:
 
         # Generate final recommendation
         if not issues:
-            return (
-                f"'{column}' is a GOOD candidate for DISTKEY. "
-                + " ".join(strengths)
-            )
+            return f"'{column}' is a GOOD candidate for DISTKEY. " + " ".join(strengths)
         elif len(issues) == 1 and strengths:
             return (
                 f"'{column}' is an ACCEPTABLE candidate for DISTKEY with caveats. "
                 + issues[0]
             )
         else:
-            return (
-                f"'{column}' is NOT recommended as DISTKEY. "
-                + " ".join(issues)
-            )
+            return f"'{column}' is NOT recommended as DISTKEY. " + " ".join(issues)
 
     def compare_columns(
         self,
@@ -383,34 +373,40 @@ class DistributionAnalyzer:
         for col in columns:
             try:
                 analysis = self.analyze(df, col)
-                results.append({
-                    "column": col,
-                    "unique_values": analysis.unique_values,
-                    "cardinality_ratio": analysis.cardinality_ratio,
-                    "skew_ratio": analysis.skew_ratio,
-                    "cv": analysis.coefficient_of_variation,
-                    "null_count": analysis.null_count,
-                    "is_good_distkey": analysis.is_good_distkey(),
-                    "recommendation": "Good" if analysis.is_good_distkey() else "Not Recommended",
-                })
+                results.append(
+                    {
+                        "column": col,
+                        "unique_values": analysis.unique_values,
+                        "cardinality_ratio": analysis.cardinality_ratio,
+                        "skew_ratio": analysis.skew_ratio,
+                        "cv": analysis.coefficient_of_variation,
+                        "null_count": analysis.null_count,
+                        "is_good_distkey": analysis.is_good_distkey(),
+                        "recommendation": (
+                            "Good" if analysis.is_good_distkey() else "Not Recommended"
+                        ),
+                    }
+                )
             except Exception as e:
-                results.append({
-                    "column": col,
-                    "unique_values": None,
-                    "cardinality_ratio": None,
-                    "skew_ratio": None,
-                    "cv": None,
-                    "null_count": None,
-                    "is_good_distkey": False,
-                    "recommendation": f"Error: {e}",
-                })
+                results.append(
+                    {
+                        "column": col,
+                        "unique_values": None,
+                        "cardinality_ratio": None,
+                        "skew_ratio": None,
+                        "cv": None,
+                        "null_count": None,
+                        "is_good_distkey": False,
+                        "recommendation": f"Error: {e}",
+                    }
+                )
 
         comparison_df = pd.DataFrame(results)
         # Sort by skew ratio (lower is better)
-        comparison_df = comparison_df.sort_values(
+        sorted_df: pd.DataFrame = comparison_df.sort_values(
             "skew_ratio", ascending=True, na_position="last"
         )
-        return comparison_df
+        return sorted_df
 
 
 @dataclass
@@ -448,11 +444,13 @@ class UniqueKeyValidation:
         ]
 
         if not self.is_unique:
-            lines.extend([
-                "",
-                f"Duplicate Keys:       {self.duplicate_count:,}",
-                f"Rows with Duplicates: {self.duplicate_rows:,}",
-            ])
+            lines.extend(
+                [
+                    "",
+                    f"Duplicate Keys:       {self.duplicate_count:,}",
+                    f"Rows with Duplicates: {self.duplicate_rows:,}",
+                ]
+            )
 
             if self.sample_duplicates is not None and not self.sample_duplicates.empty:
                 lines.extend(["", "Sample Duplicates:"])
@@ -532,7 +530,9 @@ class UniqueKeyValidator:
                 dup_keys = duplicates_df[columns[0]].value_counts()
                 dup_keys = dup_keys[dup_keys > 1].head(sample_size)
                 sample_keys = dup_keys.index.tolist()
-                sample_duplicates = df[df[columns[0]].isin(sample_keys)][columns + [c for c in df.columns if c not in columns][:3]]
+                sample_duplicates = df[df[columns[0]].isin(sample_keys)][
+                    columns + [c for c in df.columns if c not in columns][:3]
+                ]
             else:
                 # For composite keys, get first N duplicate groups
                 dup_groups = duplicates_df.groupby(columns, dropna=False).size()
@@ -544,7 +544,7 @@ class UniqueKeyValidator:
                     if not isinstance(key_vals, tuple):
                         key_vals = (key_vals,)
                     mask = pd.Series(True, index=df.index)
-                    for col, val in zip(columns, key_vals):
+                    for col, val in zip(columns, key_vals, strict=True):
                         if pd.isna(val):
                             mask &= df[col].isna()
                         else:
@@ -591,29 +591,22 @@ class UniqueKeyValidator:
         results: list[tuple[list[str], int]] = []
         total_rows = len(df)
 
-        # Check single columns
+        # Check single columns first, then widen only if nothing simpler
+        # works: a two-column key that happens to be unique is not
+        # interesting if a single column already is.
         for col in candidates:
-            unique_count = df[col].nunique()
+            unique_count = int(df[col].nunique())
             if unique_count == total_rows:
-                results.append(([col], unique_count))
+                results.append(([str(col)], unique_count))
 
-        # Check pairs if no single column is unique
-        if not results and max_columns >= 2:
-            from itertools import combinations
-
-            for cols in combinations(candidates, 2):
-                unique_count = df.groupby(list(cols), dropna=False).ngroups
+        for width in range(2, max_columns + 1):
+            if results:
+                break
+            for combo in combinations(candidates, width):
+                combo_cols = [str(c) for c in combo]
+                unique_count = int(df.groupby(combo_cols, dropna=False).ngroups)
                 if unique_count == total_rows:
-                    results.append((list(cols), unique_count))
-
-        # Check triples if needed
-        if not results and max_columns >= 3:
-            from itertools import combinations
-
-            for cols in combinations(candidates, 3):
-                unique_count = df.groupby(list(cols), dropna=False).ngroups
-                if unique_count == total_rows:
-                    results.append((list(cols), unique_count))
+                    results.append((combo_cols, unique_count))
 
         # Sort by number of columns (prefer simpler keys)
         results.sort(key=lambda x: (len(x[0]), -x[1]))

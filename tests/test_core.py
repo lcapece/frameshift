@@ -1,11 +1,12 @@
 """Tests for the core FrameShift class."""
 
-import pandas as pd
-import pytest
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
+import pytest
+
 from frameshift import FrameShift, FrameShiftConfig, LoadResult
-from frameshift.exceptions import ValidationError, InsertError
+from frameshift.exceptions import ValidationError
 
 
 class TestFrameShiftConfig:
@@ -110,11 +111,13 @@ class TestFrameShift:
 
     @pytest.fixture
     def sample_df(self):
-        return pd.DataFrame({
-            "id": [1, 2, 3],
-            "name": ["Alice", "Bob", "Charlie"],
-            "value": [1.1, 2.2, 3.3],
-        })
+        return pd.DataFrame(
+            {
+                "id": [1, 2, 3],
+                "name": ["Alice", "Bob", "Charlie"],
+                "value": [1.1, 2.2, 3.3],
+            }
+        )
 
     def test_initialization(self, mock_connection):
         fs = FrameShift(connection=mock_connection)
@@ -234,15 +237,16 @@ class TestFrameShiftIntegration:
         return conn
 
     def test_full_load_flow(self, mock_connection, mock_cursor):
-        df = pd.DataFrame({
-            "user_id": range(100),
-            "email": [f"user{i}@test.com" for i in range(100)],
-            "created_at": pd.date_range("2024-01-01", periods=100),
-        })
+        df = pd.DataFrame(
+            {
+                "user_id": range(100),
+                "email": [f"user{i}@test.com" for i in range(100)],
+                "created_at": pd.date_range("2024-01-01", periods=100),
+            }
+        )
 
         fs = FrameShift(connection=mock_connection)
 
-        # Dry run first
         result = fs.load(
             df,
             "users",
@@ -250,14 +254,21 @@ class TestFrameShiftIntegration:
             sortkey="created_at",
         )
 
-        # Verify cursor.execute was called
-        assert mock_cursor.execute.called
+        assert result.success
+        assert result.rows_loaded == 100
+        assert result.rows_failed == 0
+
+        executed = " ".join(call.args[0] for call in mock_cursor.execute.call_args_list)
+        assert 'DISTKEY ("user_id")' in executed
+        assert 'SORTKEY ("created_at")' in executed
 
     def test_load_with_validation(self, mock_connection):
-        df = pd.DataFrame({
-            "id": [1, 2, 2, 3],  # Duplicate
-            "name": ["a", "b", "c", "d"],
-        })
+        df = pd.DataFrame(
+            {
+                "id": [1, 2, 2, 3],  # Duplicate
+                "name": ["a", "b", "c", "d"],
+            }
+        )
 
         fs = FrameShift(connection=mock_connection)
 

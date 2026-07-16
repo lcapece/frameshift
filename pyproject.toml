@@ -4,48 +4,80 @@ build-backend = "hatchling.build"
 
 [project]
 name = "frameshift"
-version = "0.2.0"
-description = "Load pandas DataFrames into Amazon Redshift without S3 - using the somewhat-efficient multi-row INSERT statement AWS Redshift offers"
+version = "1.1.0"
+# This string is the one-line summary on PyPI search results and the page's
+# meta description. It leads with the problem, not the mechanism: nobody
+# searches for "multi-row INSERT", they search for a way out of "I need this
+# DataFrame in Redshift and I can't use S3".
+description = "Get a pandas DataFrame into Amazon Redshift when you have no S3 access and COPY isn't an option"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     {name = "Louis N. Capece", email = "lcapece@optonline.net"}
 ]
 maintainers = [
     {name = "Louis N. Capece", email = "lcapece@optonline.net"}
 ]
+# Keywords are weighted lightly by PyPI's own search, but the page is
+# indexed by search engines, so these track what someone actually types when
+# they hit this problem -- "redshift without s3", "redshift copy
+# alternative" -- not internal vocabulary like "multi-row-insert", which
+# describes the mechanism nobody is searching for.
+#
+# Deliberately absent: "etl", "pipeline", "data-engineering". Those imply
+# recurring production workloads, which is exactly what this library is not
+# for. Ranking for them would draw people who should be using COPY.
 keywords = [
     "redshift",
+    "amazon-redshift",
+    "aws-redshift",
     "pandas",
     "dataframe",
-    "without s3",
+    "redshift-without-s3",
     "no-s3",
-    "multi-row-insert",
-    "data loading",
-    "insert",
-    "bulk-insert",
+    "copy-alternative",
+    "redshift-insert",
+    "load-dataframe-to-redshift",
+    "redshift-data-api",
+    "distkey",
+    "sortkey",
+    "to_sql",
+    "one-off-load",
+    "ad-hoc",
 ]
 classifiers = [
+    # Beta, not Production/Stable. The library is well tested, but it is an
+    # escape hatch for one-off loads, not infrastructure to build a recurring
+    # pipeline on -- and its failure paths are not yet verified against a
+    # live cluster. Claiming stability it has not earned is how a small
+    # project loses trust.
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Database",
+    "Topic :: Database :: Front-Ends",
     "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Software Development :: Libraries",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Typing :: Typed",
 ]
+# A driver is deliberately not required. Frameshift can drive psycopg2,
+# redshift-connector, SQLAlchemy, or any DB-API connection the caller
+# already has -- and in the locked-down environments it is written for, the
+# choice of driver is usually not the caller's to make. Install one of the
+# extras below, or bring your own connection.
 dependencies = [
     "pandas>=1.5.0",
-    "psycopg2-binary>=2.9.0",
     "numpy>=1.21.0",
 ]
 
@@ -58,6 +90,9 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0.0",
     "pandas-stubs>=2.0.0",
+]
+psycopg2 = [
+    "psycopg2-binary>=2.9.0",
 ]
 redshift-connector = [
     "redshift-connector>=2.0.0",
@@ -72,15 +107,19 @@ docs = [
     "myst-parser>=2.0.0",
 ]
 all = [
-    "frameshift[dev,redshift-connector,sqlalchemy,docs]",
+    "frameshift[dev,psycopg2,redshift-connector,sqlalchemy,docs]",
 ]
 
 [project.urls]
+# These render as the sidebar links on the PyPI page. Documentation points
+# at the README rather than readthedocs, which returns 404 -- a dead docs
+# link is worse than no docs link.
 Homepage = "https://github.com/lcapece/frameshift"
-Documentation = "https://frameshift.readthedocs.io"
+Documentation = "https://github.com/lcapece/frameshift#readme"
 Repository = "https://github.com/lcapece/frameshift"
 Issues = "https://github.com/lcapece/frameshift/issues"
 Changelog = "https://github.com/lcapece/frameshift/blob/main/CHANGELOG.md"
+"Security Policy" = "https://github.com/lcapece/frameshift/blob/main/SECURITY.md"
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -121,11 +160,11 @@ exclude_lines = [
 
 [tool.black]
 line-length = 88
-target-version = ["py39", "py310", "py311", "py312"]
+target-version = ["py310", "py311", "py312", "py313"]
 
 [tool.ruff]
 line-length = 88
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = [
@@ -148,7 +187,11 @@ ignore = [
 known-first-party = ["frameshift"]
 
 [tool.mypy]
-python_version = "3.9"
+# python_version is deliberately unset. Pinning it to the 3.10 floor makes
+# mypy parse the *installed* numpy stubs under 3.10 rules, and recent numpy
+# stubs use 3.12 syntax -- so the check fails on the very interpreters the
+# CI matrix is meant to cover. Unset, mypy uses the running interpreter,
+# which is exactly the version under test.
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -160,8 +203,11 @@ warn_unused_ignores = true
 show_error_codes = true
 
 [[tool.mypy.overrides]]
+# Optional drivers. None is a hard dependency, so they may be absent when
+# type checking; their imports are guarded at runtime.
 module = [
     "psycopg2.*",
     "redshift_connector.*",
+    "sqlalchemy.*",
 ]
 ignore_missing_imports = true
