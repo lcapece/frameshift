@@ -29,12 +29,18 @@ That's it. That's the library.
 Let's get this out of the way, because you will hear it from someone
 eventually and it may as well be from the README:
 
+**Frameshift is roughly 10-20x slower than `COPY`.** There. Said it. Right
+under the install instructions, where you can't miss it.
+
 **Loading Redshift with `INSERT` is the wrong way to load Redshift.** AWS
 says so. Every consultant says so. Your colleague who has Opinions about
 data warehouses will absolutely say so. They are all correct. Redshift wants
 to slurp files out of S3 in parallel across every slice it owns. Frameshift
-politely hands the leader node one statement at a time and waits. It is the
-slow way. On purpose. Because it is what's left when S3 is off the table.
+politely hands the leader node one statement at a time and waits.
+
+(We tried being clever. Sixteen parallel threads, mimicking Redshift's own
+MD5 hash distribution. The leader node serializes everything anyway. It was
+a lovely afternoon and it accomplished nothing.)
 
 **Do not build a production pipeline on this.** If you catch yourself
 scheduling it nightly, that is not a Frameshift feature, that is a cry for
@@ -61,12 +67,16 @@ If any of these is your afternoon, you're in the right place:
   quarter.
 - **"My VPC can't reach S3."** No endpoint, no NAT gateway, no dice. `COPY`
   can't fetch a file it can't get to.
+- **"We're air-gapped."** Or in GovCloud, or behind a proxy that treats
+  `s3.amazonaws.com` as a personal insult.
+- **"Nobody will give me the S3 credentials."** They exist. Somewhere.
+  Someone has them. It is not you.
 - **"I'm stuck on the Redshift Data API."** With its 100 KB statement
   ceiling. (`FrameShiftConfig.for_data_api()` handles the arithmetic.)
 - **"It's a Lambda / notebook / CI job."** Staging a file and cleaning it
   up is more work than the actual load.
-- **"It's 200 rows."** Standing up an S3 workflow for 200 rows is like
-  renting a freight elevator to move a houseplant.
+- **"It's 200 rows, once."** Standing up an S3 pipeline for 200 rows is
+  like renting a freight elevator to move a houseplant.
 
 If none of those are you: `COPY`, or
 [`awswrangler`](https://github.com/aws/aws-sdk-pandas), which wraps it
